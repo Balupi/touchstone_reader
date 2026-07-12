@@ -73,26 +73,39 @@ let magnitudeGrid (data: TouchstoneFile) =
     |> Chart.Grid(n, n)
     |> Chart.withSize (350 * n, 300 * n)
 
-/// 2x2 grid of magnitude (dB) subplots for 2-port S-parameter files, in the
-/// conventional VNA quad layout: S11 top-left, S21 top-right, S12
-/// bottom-left, S22 bottom-right. Each subplot overlays every labeled file's
-/// trace for that parameter; files that aren't 2-port are skipped.
-let magnitudeQuadMulti (files: (string * TouchstoneFile) list) =
-    let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
+/// Conventional VNA quad order: S11 top-left, S21 top-right, S12
+/// bottom-left, S22 bottom-right.
+let magnitudeQuadOrder = [ (1, 1); (2, 1); (1, 2); (2, 2) ]
 
-    // Chart.Grid collapses a per-subplot Chart.withTitle into one shared title
-    // (only the last one wins), but each subplot keeps its own axes — so the
-    // per-cell label goes on the Y axis instead.
-    let subplot (label: string) (i, j) =
-        files2p
-        |> List.map (fun (fileLabel, data) -> oneParamTrace fileLabel toDb i j data)
-        |> Chart.combine
-        |> Chart.withYAxisStyle label
+/// Grid of magnitude (dB) subplots for 2-port S-parameter files, one per
+/// selected (i,j) parameter (e.g. `[ (1,1); (2,1) ]` for S11+S21), laid out
+/// left-to-right top-to-bottom in up to 2 columns. Each subplot overlays
+/// every labeled file's trace for that parameter; files that aren't 2-port
+/// are skipped. Returns None if `selected` is empty.
+let magnitudeQuadMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+    if selected.IsEmpty then
+        None
+    else
+        let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
 
-    [ subplot "S11" (1, 1); subplot "S21" (2, 1); subplot "S12" (1, 2); subplot "S22" (2, 2) ]
-    |> Chart.Grid(2, 2)
-    |> Chart.withTitle "Magnitude (dB)"
-    |> Chart.withSize (900, 700)
+        // Chart.Grid collapses a per-subplot Chart.withTitle into one shared
+        // title (only the last one wins), but each subplot keeps its own
+        // axes — so the per-cell label goes on the Y axis instead.
+        let subplot (i, j) =
+            files2p
+            |> List.map (fun (label, data) -> oneParamTrace label toDb i j data)
+            |> Chart.combine
+            |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
+
+        let cols = min 2 selected.Length
+        let rows = (selected.Length + cols - 1) / cols
+
+        selected
+        |> List.map subplot
+        |> Chart.Grid(rows, cols)
+        |> Chart.withTitle "Magnitude (dB)"
+        |> Chart.withSize (450 * cols, 350 * rows)
+        |> Some
 
 let private circlePoints (cx: float) (cy: float) (r: float) (n: int) =
     [| for k in 0 .. n ->

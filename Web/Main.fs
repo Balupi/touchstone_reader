@@ -14,13 +14,19 @@ type LoadedFile =
     { FileName: string
       Data: Result<TouchstoneFile, string> }
 
-type Model = { Files: LoadedFile list }
+type Model =
+    { Files: LoadedFile list
+      SelectedParams: Set<int * int> }
 
-let initModel = { Files = [] }
+let initModel =
+    { Files = []
+      SelectedParams = Set.ofList magnitudeQuadOrder }
 
 type Message =
     | FileDropped of fileName: string * content: string
+    | RemoveFile of fileName: string
     | ClearFiles
+    | ToggleParam of i: int * j: int
 
 let update message model =
     match message with
@@ -39,8 +45,20 @@ let update message model =
             else
                 model.Files @ [ entry ]
 
-        { Files = files }
+        { model with Files = files }
+    | RemoveFile fileName ->
+        { model with Files = model.Files |> List.filter (fun f -> f.FileName <> fileName) }
     | ClearFiles -> initModel
+    | ToggleParam(i, j) ->
+        let key = (i, j)
+
+        let selected =
+            if model.SelectedParams.Contains key then
+                Set.remove key model.SelectedParams
+            else
+                Set.add key model.SelectedParams
+
+        { model with SelectedParams = selected }
 
 /// The Ok files, paired with their filename for use as an overlay chart label.
 let private okFiles (model: Model) =
@@ -59,18 +77,36 @@ let private summary (data: TouchstoneFile) =
         data.Option.Format
         data.Option.R
 
-let private fileTag (f: LoadedFile) =
-    match f.Data with
-    | Ok data ->
-        div {
-            attr.``class`` "notification is-info mt-2"
-            sprintf "%s — %s" f.FileName (summary data)
+let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
+    let cls =
+        match f.Data with
+        | Ok _ -> "notification is-info mt-2"
+        | Error _ -> "notification is-danger mt-2"
+
+    let text =
+        match f.Data with
+        | Ok data -> sprintf "%s — %s" f.FileName (summary data)
+        | Error msg -> sprintf "%s — %s" f.FileName msg
+
+    div {
+        attr.``class`` cls
+
+        button {
+            attr.``class`` "delete"
+            on.click (fun _ -> dispatch (RemoveFile f.FileName))
         }
-    | Error msg ->
-        div {
-            attr.``class`` "notification is-danger mt-2"
-            sprintf "%s — %s" f.FileName msg
-        }
+
+        text
+    }
+
+let private paramToggle (dispatch: Dispatch<Message>) (selected: Set<int * int>) (i, j) =
+    let isOn = selected.Contains(i, j)
+
+    button {
+        attr.``class`` (if isOn then "button is-small is-info mr-2" else "button is-small mr-2")
+        on.click (fun _ -> dispatch (ToggleParam(i, j)))
+        sprintf "S%d%d" i j
+    }
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
@@ -131,16 +167,33 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                 }
 
                 for f in model.Files do
-                    fileTag f
+                    fileTag dispatch f
 
                 let ok = okFiles model
+                let has2Port = ok |> List.exists (fun (_, data) -> data.Ports = 2)
 
                 if not ok.IsEmpty then
                     concat {
-                        div {
-                            attr.id "chart-magnitude"
-                            attr.``class`` "mt-4"
-                        }
+                        if has2Port then
+                            concat {
+                                div {
+                                    attr.``class`` "field is-grouped mt-4"
+
+                                    for pij in magnitudeQuadOrder do
+                                        paramToggle dispatch model.SelectedParams pij
+                                }
+
+                                if model.SelectedParams.IsEmpty then
+                                    p {
+                                        attr.``class`` "has-text-grey"
+                                        "Select at least one S-parameter above to show the magnitude plot."
+                                    }
+                                else
+                                    div {
+                                        attr.id "chart-magnitude"
+                                        attr.``class`` "mt-2"
+                                    }
+                            }
 
                         div {
                             attr.id "chart-phase"
@@ -183,24 +236,34 @@ type App() =
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupDropZone", "drop-zone", objRef).AsTask()
 
             let ok = okFiles currentModel
-            let key = ok |> List.map fst |> String.concat "|"
 
-            if key <> "" && lastRenderedKey <> Some key then
-                lastRenderedKey <- Some key
-
-                let render (divId: string) (chart: GenericChart.GenericChart) : Task =
-                    this.JSRuntime
-                        .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
-                        .AsTask()
-
-                do! render "chart-magnitude" (magnitudeQuadMulti ok)
-                do! render "chart-phase" (phaseChartMulti ok)
-
-                match smithChartMulti ok with
-                | Some chart -> do! render "chart-smith" chart
-                | None -> ()
-            elif key = "" then
+            if ok.IsEmpty then
                 lastRenderedKey <- None
+            else
+                let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
+
+                let key =
+                    (ok |> List.map fst |> String.concat "|")
+                    + "##"
+                    + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
+
+                if lastRenderedKey <> Some key then
+                    lastRenderedKey <- Some key
+
+                    let render (divId: string) (chart: GenericChart.GenericChart) : Task =
+                        this.JSRuntime
+                            .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
+                            .AsTask()
+
+                    match magnitudeQuadMulti selected ok with
+                    | Some chart -> do! render "chart-magnitude" chart
+                    | None -> ()
+
+                    do! render "chart-phase" (phaseChartMulti ok)
+
+                    match smithChartMulti ok with
+                    | Some chart -> do! render "chart-smith" chart
+                    | None -> ()
         }
         :> Task
 
