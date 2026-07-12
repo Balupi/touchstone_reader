@@ -7,6 +7,8 @@
   <ItemGroup>
     <Compile Include="..\Touchstone.fs" />
     <Compile Include="..\TouchstonePlot.fs" />
+    <Compile Include="State.fs" />
+    <Compile Include="View.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
