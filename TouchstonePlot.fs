@@ -260,8 +260,9 @@ let private quadMulti
 
         Some { Chart = chart; Csv = toCsv "Frequency (GHz)" unit allSeries }
 
-/// Grid of magnitude (dB) subplots, each annotated with its global min/max — see quadMulti.
-let magnitudeQuadMulti selected files = quadMulti "Magnitude (dB)" "dB" toDb true selected files
+/// Grid of magnitude (dB) subplots, each optionally annotated with its
+/// global min/max — see quadMulti.
+let magnitudeQuadMulti showExtrema selected files = quadMulti "Magnitude (dB)" "dB" toDb showExtrema selected files
 
 /// Grid of phase (deg) subplots — see quadMulti. No min/max annotations:
 /// wrapped phase makes a single global extremum meaningless.
@@ -498,10 +499,10 @@ let groupDelayOrder = [ (2, 1); (1, 2) ]
 
 /// Group delay (ns) of the selected transmission parameters (e.g.
 /// `[ (2,1); (1,2) ]` for S21+S12, or the Y/Z/... equivalents) vs frequency
-/// (GHz), overlaid across labeled 2-port files, annotated with the global
-/// min/max across all of them. Returns None if `selected` is empty or none
-/// of the files are 2-port.
-let groupDelayChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+/// (GHz), overlaid across labeled 2-port files, optionally annotated with
+/// the global min/max across all of them. Returns None if `selected` is
+/// empty or none of the files are 2-port.
+let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
     if selected.IsEmpty then
         None
     else
@@ -516,6 +517,8 @@ let groupDelayChartMulti (selected: (int * int) list) (files: (string * Touchsto
                         let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
                         (sprintf "%s S%d%d" label i j).Trim(), freqGHz, rawGroupDelay i j data ]
 
+            let annotations = if showExtrema then extremumAnnotations "x" "y" "ns" series else []
+
             let chart =
                 files2p
                 |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace label i j data))
@@ -523,7 +526,7 @@ let groupDelayChartMulti (selected: (int * int) list) (files: (string * Touchsto
                 |> Chart.withTitle "Group Delay (ns)"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle "Group Delay (ns)"
-                |> Chart.withAnnotations (extremumAnnotations "x" "y" "ns" series)
+                |> Chart.withAnnotations annotations
 
             Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Group Delay (ns)" series }
 
@@ -531,10 +534,10 @@ let groupDelayChartMulti (selected: (int * int) list) (files: (string * Touchsto
 /// from the pointwise mean across all loaded files, instead of the absolute
 /// delay — useful for spotting how much units differ from one another.
 /// Files on different frequency grids are linearly interpolated onto the
-/// first file's grid before averaging. Annotated with the global min/max
-/// deviation. Returns None if `selected` is empty or fewer than two files
-/// are 2-port (a single file's deviation from itself is always zero).
-let groupDelayDeviationChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+/// first file's grid before averaging. Optionally annotated with the global
+/// min/max deviation. Returns None if `selected` is empty or fewer than two
+/// files are 2-port (a single file's deviation from itself is always zero).
+let groupDelayDeviationChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
     if selected.IsEmpty then
         None
     else
@@ -546,6 +549,7 @@ let groupDelayDeviationChartMulti (selected: (int * int) list) (files: (string *
             let results = selected |> List.map (fun (i, j) -> groupDelayDeviationSeriesAndTraces i j files2p)
             let traces = results |> List.collect fst
             let series = results |> List.collect snd
+            let annotations = if showExtrema then extremumAnnotations "x" "y" "ns" series else []
 
             let chart =
                 traces
@@ -553,7 +557,7 @@ let groupDelayDeviationChartMulti (selected: (int * int) list) (files: (string *
                 |> Chart.withTitle "Group Delay Deviation from Mean (ns)"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle "Δ Group Delay (ns)"
-                |> Chart.withAnnotations (extremumAnnotations "x" "y" "ns" series)
+                |> Chart.withAnnotations annotations
 
             Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Δ Group Delay (ns)" series }
 

@@ -46,6 +46,10 @@ window.touchstoneInterop = {
         delete layout.width
         const isSmith = layout.xaxis && layout.xaxis.title && layout.xaxis.title.text === 'Re(Γ)'
         if (!isSmith) layout.hovermode = 'x unified'
+        // Unified hover's per-trace name (e.g. "deviceA.s2p S11") is
+        // truncated to 15 chars by default, which cuts off exactly the part
+        // that distinguishes files — disable that.
+        layout.hoverlabel = Object.assign({}, layout.hoverlabel, { namelength: -1 })
         return layout
     },
 
@@ -69,6 +73,17 @@ window.touchstoneInterop = {
                 zerolinecolor: 'rgba(255,255,255,0.3)',
                 linecolor: 'rgba(255,255,255,0.3)',
             });
+        });
+
+        // The unified-hover box (and the axis-hover legend it's built from)
+        // always paints its own background regardless of paper_bgcolor, and
+        // defaults to white — combined with the light-gray font color set
+        // above, that made hover text on hover nearly invisible. Give it an
+        // explicit dark background to match.
+        layout.hoverlabel = Object.assign({}, layout.hoverlabel, {
+            bgcolor: 'rgba(35,35,40,0.95)',
+            bordercolor: 'rgba(255,255,255,0.3)',
+            font: Object.assign({}, layout.hoverlabel && layout.hoverlabel.font, { color: '#e6e6e6' }),
         });
         return layout;
     },
@@ -128,6 +143,14 @@ window.touchstoneInterop = {
         URL.revokeObjectURL(url);
     },
 
+    // Shared by the modebar's CSV button and the always-visible "CSV" button
+    // in each chart section's toggle row (added because the modebar only
+    // reveals itself on hover and its icons are easy to miss/mix up).
+    downloadCsv: function (divId) {
+        const fig = window.touchstoneInterop._lastFigures[divId];
+        if (fig && fig.csv) window.touchstoneInterop._downloadText(divId + '.csv', fig.csv);
+    },
+
     _config: function (divId) {
         return {
             responsive: true,
@@ -158,8 +181,7 @@ window.touchstoneInterop = {
                     title: 'Download data as csv',
                     icon: Plotly.Icons.disk,
                     click: function () {
-                        const fig = window.touchstoneInterop._lastFigures[divId];
-                        if (fig && fig.csv) window.touchstoneInterop._downloadText(divId + '.csv', fig.csv);
+                        window.touchstoneInterop.downloadCsv(divId);
                     },
                 },
             ],
@@ -211,6 +233,15 @@ window.touchstoneInterop = {
                 if (!details.open) return;
                 details.querySelectorAll('.js-plotly-plot').forEach((el) => Plotly.Plots.resize(el));
             });
+        });
+
+        // Wires each chart section's always-visible "CSV" button; the
+        // button's id ("csv-chart-magnitude" etc.) encodes its chart's divId.
+        document.querySelectorAll('button[id^="csv-"]').forEach((btn) => {
+            if (btn.dataset.csvBound) return;
+            btn.dataset.csvBound = 'true';
+            const divId = btn.id.slice('csv-'.length);
+            btn.addEventListener('click', () => window.touchstoneInterop.downloadCsv(divId));
         });
     }
 };

@@ -49,7 +49,11 @@
 <body>
     <div id="app">Loading...</div>
 
-    <script src="interop.js"></script>
+    <!-- ?v= is a manual cache-buster: browsers cache this file aggressively
+         since it has no build-generated hash like the Blazor assets do below.
+         Bump the number whenever interop.js changes, or returning visitors
+         (and this dev server across restarts) can keep running a stale copy. -->
+    <script src="interop.js?v=2"></script>
     <script src="_framework/blazor.webassembly.js"></script>
 </body>
 

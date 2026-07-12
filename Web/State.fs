@@ -28,6 +28,7 @@ type Model =
       SmithSelected: Set<int * int>
       GroupDelaySelected: Set<int * int>
       GroupDelayMode: DisplayMode
+      ShowExtrema: bool
       Status: string option }
 
 let initModel =
@@ -37,6 +38,7 @@ let initModel =
       SmithSelected = Set.ofList smithOrder
       GroupDelaySelected = Set.ofList groupDelayOrder
       GroupDelayMode = Absolute
+      ShowExtrema = true
       Status = None }
 
 type Message =
@@ -45,6 +47,7 @@ type Message =
     | ClearFiles
     | ToggleParam of chart: ChartKind * i: int * j: int
     | SetGroupDelayMode of DisplayMode
+    | SetShowExtrema of bool
     | SetStatus of string option
 
 let update message model =
@@ -81,6 +84,7 @@ let update message model =
         | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
         | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
     | SetGroupDelayMode mode -> { model with GroupDelayMode = mode }
+    | SetShowExtrema show -> { model with ShowExtrema = show }
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart label.

@@ -68,6 +68,19 @@ let private paramToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (select
         sprintf "S%d%d" i j
     }
 
+/// Downloads the chart's underlying (non-downsampled) data as a CSV, via the
+/// figure JSON interop.js already cached for the modebar's own CSV button —
+/// this is a second, always-visible entry point to the same download since
+/// the modebar only reveals itself on hover and easily goes unnoticed among
+/// its other icons.
+let private csvDownloadButton (divId: string) =
+    button {
+        attr.``class`` "button is-small is-light ml-auto"
+        attr.id (sprintf "csv-%s" divId)
+        attr.title "Rohdaten (nicht downgesampelt) als CSV herunterladen"
+        "⬇ CSV"
+    }
+
 /// A collapsible <details> section with its own parameter toggle row and
 /// chart container. `open`'s toggle event doesn't rebuild the Plotly chart,
 /// so interop.js resizes it on expand — otherwise a chart drawn while
@@ -101,6 +114,8 @@ let private chartSection
 
             for pij in order do
                 paramToggle dispatch chart selected pij
+
+            csvDownloadButton divId
         }
 
         extraControls
@@ -155,6 +170,34 @@ let private groupDelayModeToggle (dispatch: Dispatch<Message>) (mode: DisplayMod
                 }
             }
         }
+
+/// On/off switch for the Magnitude and Group Delay charts' min/max
+/// annotations — shared by both since it's one setting, not a per-chart one.
+let private extremaToggle (dispatch: Dispatch<Message>) (show: bool) =
+    div {
+        attr.``class`` "field is-grouped is-align-items-center mb-3"
+
+        p {
+            attr.``class`` "mr-2 has-text-grey"
+            "Min/Max-Markierungen:"
+        }
+
+        div {
+            attr.``class`` "buttons has-addons mb-0"
+
+            button {
+                attr.``class`` (if show then "button is-small is-info is-selected" else "button is-small")
+                on.click (fun _ -> dispatch (SetShowExtrema true))
+                "An"
+            }
+
+            button {
+                attr.``class`` (if not show then "button is-small is-info is-selected" else "button is-small")
+                on.click (fun _ -> dispatch (SetShowExtrema false))
+                "Aus"
+            }
+        }
+    }
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
@@ -271,6 +314,8 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                     concat {
                         if has2Port then
                             concat {
+                                extremaToggle dispatch model.ShowExtrema
+
                                 chartSection
                                     dispatch
                                     "Magnitude (dB)"
