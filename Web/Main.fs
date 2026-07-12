@@ -16,17 +16,20 @@ type LoadedFile =
 
 type Model =
     { Files: LoadedFile list
-      SelectedParams: Set<int * int> }
+      SelectedParams: Set<int * int>
+      Status: string option }
 
 let initModel =
     { Files = []
-      SelectedParams = Set.ofList magnitudeQuadOrder }
+      SelectedParams = Set.ofList magnitudeQuadOrder
+      Status = None }
 
 type Message =
     | FileDropped of fileName: string * content: string
     | RemoveFile of fileName: string
     | ClearFiles
     | ToggleParam of i: int * j: int
+    | SetStatus of string option
 
 let update message model =
     match message with
@@ -59,6 +62,7 @@ let update message model =
                 Set.add key model.SelectedParams
 
         { model with SelectedParams = selected }
+    | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart label.
 let private okFiles (model: Model) =
@@ -120,6 +124,17 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
         p {
             attr.``class`` "subtitle"
             "Drop one or more .sNp Touchstone files to plot them overlaid."
+        }
+
+        // Always present (never inserted/removed) so it doesn't shift sibling
+        // positions in Blazor's diff — that would make it repatch the chart
+        // divs below and wipe out the content Plotly injected into them,
+        // since Blazor has no idea that content is there. Visibility is
+        // toggled with a style instead.
+        p {
+            attr.``class`` "has-text-warning mb-2"
+            attr.style (if model.Status.IsSome then "" else "display: none")
+            sprintf "⏳ %s" (defaultArg model.Status "")
         }
 
         label {
@@ -215,6 +230,10 @@ type App() =
     let mutable currentModel = initModel
     let mutable lastFilesKey: string option = None
     let mutable lastMagnitudeKey: string option = None
+    // Guards against the render triggered by our own SetStatus dispatch
+    // re-entering this method (Blazor calls OnAfterRenderAsync after every
+    // render) and racing to redo or prematurely clear the same work.
+    let mutable isRendering = false
 
     let view model dispatch =
         currentModel <- model
@@ -224,7 +243,14 @@ type App() =
 
     [<JSInvokable>]
     member this.OnFileDropped(fileName: string, content: string) =
-        this.Dispatch(FileDropped(fileName, content))
+        task {
+            this.Dispatch(SetStatus(Some(sprintf "Parsing %s…" fileName)))
+            // WASM is single-threaded: without yielding here, the browser never
+            // gets a chance to paint the status before parsing blocks it.
+            do! Task.Delay 1
+            this.Dispatch(FileDropped(fileName, content))
+        }
+        :> Task
 
     override this.OnAfterRenderAsync(firstRender: bool) =
         let baseTask = base.OnAfterRenderAsync(firstRender)
@@ -236,41 +262,58 @@ type App() =
                 let objRef = DotNetObjectReference.Create(this)
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupDropZone", "drop-zone", objRef).AsTask()
 
-            let ok = okFiles currentModel
+            if not isRendering then
+                let ok = okFiles currentModel
 
-            if ok.IsEmpty then
-                lastFilesKey <- None
-                lastMagnitudeKey <- None
-            else
-                let render (divId: string) (chart: GenericChart.GenericChart) : Task =
-                    this.JSRuntime
-                        .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
-                        .AsTask()
+                if ok.IsEmpty then
+                    lastFilesKey <- None
+                    lastMagnitudeKey <- None
 
-                let filesKey = ok |> List.map fst |> String.concat "|"
-                let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
+                    if currentModel.Status.IsSome then
+                        this.Dispatch(SetStatus None)
+                else
+                    let filesKey = ok |> List.map fst |> String.concat "|"
+                    let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
 
-                let magnitudeKey =
-                    filesKey + "##" + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
+                    let magnitudeKey =
+                        filesKey
+                        + "##"
+                        + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
 
-                // Magnitude redraws on file OR parameter-selection changes; phase and
-                // Smith only care about the files, so toggling a parameter checkbox
-                // doesn't force two unrelated Plotly redraws along with it.
-                if lastMagnitudeKey <> Some magnitudeKey then
-                    lastMagnitudeKey <- Some magnitudeKey
+                    // Magnitude redraws on file OR parameter-selection changes;
+                    // phase and Smith only care about the files, so toggling a
+                    // parameter checkbox doesn't force two unrelated redraws.
+                    let needsMagnitude = lastMagnitudeKey <> Some magnitudeKey
+                    let needsFiles = lastFilesKey <> Some filesKey
 
-                    match magnitudeQuadMulti selected ok with
-                    | Some chart -> do! render "chart-magnitude" chart
-                    | None -> ()
+                    if needsMagnitude || needsFiles then
+                        isRendering <- true
+                        lastMagnitudeKey <- Some magnitudeKey
+                        lastFilesKey <- Some filesKey
+                        this.Dispatch(SetStatus(Some "Downsampling & rendering charts…"))
+                        do! Task.Delay 1
 
-                if lastFilesKey <> Some filesKey then
-                    lastFilesKey <- Some filesKey
+                        let render (divId: string) (chart: GenericChart.GenericChart) : Task =
+                            this.JSRuntime
+                                .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
+                                .AsTask()
 
-                    do! render "chart-phase" (phaseChartMulti ok)
+                        if needsMagnitude then
+                            match magnitudeQuadMulti selected ok with
+                            | Some chart -> do! render "chart-magnitude" chart
+                            | None -> ()
 
-                    match smithChartMulti ok with
-                    | Some chart -> do! render "chart-smith" chart
-                    | None -> ()
+                        if needsFiles then
+                            do! render "chart-phase" (phaseChartMulti ok)
+
+                            match smithChartMulti ok with
+                            | Some chart -> do! render "chart-smith" chart
+                            | None -> ()
+
+                        this.Dispatch(SetStatus None)
+                        isRendering <- false
+                    elif currentModel.Status.IsSome then
+                        this.Dispatch(SetStatus None)
         }
         :> Task
 
