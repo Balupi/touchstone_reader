@@ -58,6 +58,32 @@ window.touchstoneInterop = {
     // redraw already-rendered charts without needing new data from .NET.
     _lastFigures: {},
 
+    // JPEG has no alpha channel, so a transparent/dark-mode paper_bgcolor
+    // would export as a black background instead of disappearing. Swap in
+    // white just for the download, then swap back — replaces the default
+    // camera button since its own download path always uses the on-screen
+    // (possibly transparent) colors.
+    _config: function (divId) {
+        return {
+            responsive: true,
+            modeBarButtonsToRemove: ['toImage'],
+            modeBarButtonsToAdd: [
+                {
+                    name: 'downloadJpegWhite',
+                    title: 'Download plot as jpeg',
+                    icon: Plotly.Icons.camera,
+                    click: function (gd) {
+                        const prevPaper = gd.layout.paper_bgcolor;
+                        const prevPlot = gd.layout.plot_bgcolor;
+                        Plotly.relayout(gd, { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' })
+                            .then(() => Plotly.downloadImage(gd, { format: 'jpeg', filename: divId }))
+                            .then(() => Plotly.relayout(gd, { paper_bgcolor: prevPaper, plot_bgcolor: prevPlot }));
+                    },
+                },
+            ],
+        };
+    },
+
     renderChart: function (divId, figureJson) {
         const el = document.getElementById(divId);
         if (!el) return;
@@ -65,7 +91,7 @@ window.touchstoneInterop = {
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.
-        Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), { responsive: true });
+        Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), window.touchstoneInterop._config(divId));
     },
 
     // Without this, a chart rendered under one OS theme keeps that theme's
@@ -81,7 +107,12 @@ window.touchstoneInterop = {
             Object.keys(window.touchstoneInterop._lastFigures).forEach((divId) => {
                 if (!document.getElementById(divId)) return;
                 const fig = window.touchstoneInterop._lastFigures[divId];
-                Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), { responsive: true });
+                Plotly.react(
+                    divId,
+                    fig.data,
+                    window.touchstoneInterop._themeLayout(fig.layout),
+                    window.touchstoneInterop._config(divId)
+                );
             });
         });
     },
