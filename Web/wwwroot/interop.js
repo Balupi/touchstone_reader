@@ -26,6 +26,8 @@ window.touchstoneInterop = {
         const el = document.getElementById(divId);
         if (!el) return;
         const fig = JSON.parse(figureJson);
-        Plotly.newPlot(divId, fig.data, fig.layout, { responsive: true });
+        // Plotly.react diffs against the existing plot and patches it in place
+        // instead of tearing down and rebuilding the whole chart like newPlot.
+        Plotly.react(divId, fig.data, fig.layout, { responsive: true });
     }
 };

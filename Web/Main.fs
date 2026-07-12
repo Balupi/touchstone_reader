@@ -213,7 +213,8 @@ type App() =
     inherit ProgramComponent<Model, Message>()
 
     let mutable currentModel = initModel
-    let mutable lastRenderedKey: string option = None
+    let mutable lastFilesKey: string option = None
+    let mutable lastMagnitudeKey: string option = None
 
     let view model dispatch =
         currentModel <- model
@@ -238,26 +239,32 @@ type App() =
             let ok = okFiles currentModel
 
             if ok.IsEmpty then
-                lastRenderedKey <- None
+                lastFilesKey <- None
+                lastMagnitudeKey <- None
             else
+                let render (divId: string) (chart: GenericChart.GenericChart) : Task =
+                    this.JSRuntime
+                        .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
+                        .AsTask()
+
+                let filesKey = ok |> List.map fst |> String.concat "|"
                 let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
 
-                let key =
-                    (ok |> List.map fst |> String.concat "|")
-                    + "##"
-                    + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
+                let magnitudeKey =
+                    filesKey + "##" + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
 
-                if lastRenderedKey <> Some key then
-                    lastRenderedKey <- Some key
-
-                    let render (divId: string) (chart: GenericChart.GenericChart) : Task =
-                        this.JSRuntime
-                            .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
-                            .AsTask()
+                // Magnitude redraws on file OR parameter-selection changes; phase and
+                // Smith only care about the files, so toggling a parameter checkbox
+                // doesn't force two unrelated Plotly redraws along with it.
+                if lastMagnitudeKey <> Some magnitudeKey then
+                    lastMagnitudeKey <- Some magnitudeKey
 
                     match magnitudeQuadMulti selected ok with
                     | Some chart -> do! render "chart-magnitude" chart
                     | None -> ()
+
+                if lastFilesKey <> Some filesKey then
+                    lastFilesKey <- Some filesKey
 
                     do! render "chart-phase" (phaseChartMulti ok)
 

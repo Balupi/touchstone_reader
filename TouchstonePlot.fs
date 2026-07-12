@@ -10,15 +10,70 @@ open TouchstoneReader.Touchstone
 let private toDb (c: Complex) = 20.0 * log10 c.Magnitude
 let private toDeg (c: Complex) = c.Phase * 180.0 / Math.PI
 
+/// Points per trace above which lttb kicks in. Comfortably more than any
+/// chart's pixel width, so the reduction is invisible at normal zoom levels.
+let private maxPointsPerTrace = 1500
+
+/// Largest-Triangle-Three-Buckets downsampling: reduces a series to
+/// `threshold` points while preferentially keeping visually significant ones
+/// (peaks, dips, notches), unlike naive every-Nth-point decimation which can
+/// hide a narrow resonance or filter notch entirely. No-op below threshold.
+let private lttb (threshold: int) (points: (float * float)[]) =
+    let n = points.Length
+
+    if threshold >= n || threshold <= 2 then
+        points
+    else
+        let sampled = ResizeArray<float * float>(threshold)
+        sampled.Add points.[0]
+        let every = float (n - 2) / float (threshold - 2)
+        let mutable a = 0
+
+        for i in 0 .. threshold - 3 do
+            let avgRangeStart = int (floor ((float i + 1.0) * every)) + 1
+            let avgRangeEnd = min (int (floor ((float i + 2.0) * every)) + 1) n |> max (avgRangeStart + 1)
+
+            let mutable avgX = 0.0
+            let mutable avgY = 0.0
+
+            for k in avgRangeStart .. avgRangeEnd - 1 do
+                let (x, y) = points.[k]
+                avgX <- avgX + x
+                avgY <- avgY + y
+
+            avgX <- avgX / float (avgRangeEnd - avgRangeStart)
+            avgY <- avgY / float (avgRangeEnd - avgRangeStart)
+
+            let rangeStart = int (floor ((float i + 0.0) * every)) + 1
+            let rangeEnd = int (floor ((float i + 1.0) * every)) + 1
+            let (ax, ay) = points.[a]
+            let mutable maxArea = -1.0
+            let mutable nextA = rangeStart
+
+            for k in rangeStart .. rangeEnd - 1 do
+                let (px, py) = points.[k]
+                let area = abs ((ax - avgX) * (py - ay) - (ax - px) * (avgY - ay)) * 0.5
+
+                if area > maxArea then
+                    maxArea <- area
+                    nextA <- k
+
+            sampled.Add points.[nextA]
+            a <- nextA
+
+        sampled.Add points.[n - 1]
+        sampled.ToArray()
+
 /// One line trace for Sij (or Yij/Zij/...) of one file, `toY` picking the
 /// scalar to plot from each complex value. `label` (e.g. a filename) is
 /// prepended to the trace name when overlaying multiple files; pass "" for none.
 let private oneParamTrace (label: string) (toY: Complex -> float) (i: int) (j: int) (data: TouchstoneFile) =
     let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
     let ys = data.Matrices |> Array.map (fun m -> toY m.[i, j])
+    let points = Array.zip freqGHz ys |> lttb maxPointsPerTrace
     let name = sprintf "%A%d%d" data.Option.Parameter i j
     let name = if label = "" then name else sprintf "%s %s" label name
-    Chart.Line(x = freqGHz, y = ys, Name = name)
+    Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
 
 /// Line traces for every Sij (or Yij/Zij/...) of one file.
 let private paramTraces (label: string) (toY: Complex -> float) (data: TouchstoneFile) =
@@ -161,10 +216,14 @@ let private smithGrid () =
 
 let private smithTraces (label: string) (data: TouchstoneFile) =
     [ for i in 1 .. data.Ports ->
-        let gammas = data.Matrices |> Array.map (fun m -> m.[i, i])
+        let points =
+            data.Matrices
+            |> Array.map (fun m -> let g = m.[i, i] in (g.Real, g.Imaginary))
+            |> lttb maxPointsPerTrace
+
         let name = sprintf "S%d%d" i i
         let name = if label = "" then name else sprintf "%s %s" label name
-        Chart.Line(x = (gammas |> Array.map (fun g -> g.Real)), y = (gammas |> Array.map (fun g -> g.Imaginary)), Name = name) ]
+        Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name) ]
 
 let private smithLayout (chart: GenericChart.GenericChart) =
     let axisRange = StyleParam.Range.MinMax(-1.15, 1.15)
