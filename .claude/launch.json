@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "Web/TouchstoneReader.Web.fsproj"],
+      "port": 5000
+    }
+  ]
+}

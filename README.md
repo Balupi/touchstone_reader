@@ -14,6 +14,18 @@ parameter (S11, S21, ... or Y/Z/H/G equivalents), in your default browser. For
 S-parameter files, also opens a Smith chart of the input reflection coefficients
 (S11, S22, ...).
 
+## Web frontend
+
+```
+dotnet run --project Web/TouchstoneReader.Web.fsproj
+```
+
+Starts a local dev server (default `http://localhost:5000`) with a page to drag
+and drop a Touchstone file onto — it's parsed entirely in the browser (Blazor
+WebAssembly via [Bolero](https://fsbolero.io), Elmish architecture, Bulma
+styling) and renders the same magnitude, phase, and Smith charts as the CLI.
+No file is ever uploaded anywhere.
+
 ## Use as a library
 
 ```fsharp

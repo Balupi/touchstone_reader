@@ -77,12 +77,14 @@ let private entryOrder (ports: int) (matrixFmt: MatrixFormat) (twoPortOrder: Two
         | Lower -> [ for i in 1 .. n do for j in 1 .. i -> (i, j) ]
         | Upper -> [ for i in 1 .. n do for j in i .. n -> (i, j) ]
 
-/// Reads any Touchstone file (v1.x legacy or v2.0 keyword-based).
-/// v2.0 support covers Version / Number of Ports / Reference / Matrix Format /
-/// Two-Port Data Order / Network Data / End. Noise-data blocks are skipped.
-let read (path: string) : TouchstoneFile =
+/// Parses Touchstone file content already in memory (v1.x legacy or v2.0
+/// keyword-based). `fileName` is only used to infer the port count from a
+/// legacy .sNp extension. v2.0 support covers Version / Number of Ports /
+/// Reference / Matrix Format / Two-Port Data Order / Network Data / End.
+/// Noise-data blocks are skipped.
+let parse (fileName: string) (content: string) : TouchstoneFile =
     let lines =
-        File.ReadAllLines path
+        content.Replace("\r\n", "\n").Split('\n')
         |> Array.map stripComment
         |> Array.map (fun l -> l.Trim())
         |> Array.filter (fun l -> l.Length > 0)
@@ -90,7 +92,7 @@ let read (path: string) : TouchstoneFile =
     let isV2 =
         lines |> Array.exists (fun l -> l.StartsWith("[Version]", StringComparison.OrdinalIgnoreCase))
 
-    let mutable ports = if isV2 then 0 else portsFromExtension path
+    let mutable ports = if isV2 then 0 else portsFromExtension fileName
     let mutable opt = OptionLine.Default
     let mutable references: float list = []
     let mutable matrixFmt = Full
@@ -167,3 +169,6 @@ let read (path: string) : TouchstoneFile =
         matrices.[f] <- m
 
     { Ports = ports; Option = opt; References = references; Frequencies = freqs; Matrices = matrices }
+
+/// Reads and parses a Touchstone file from disk.
+let read (path: string) : TouchstoneFile = parse path (File.ReadAllText path)
