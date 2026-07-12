@@ -262,15 +262,12 @@ type App() =
                 let objRef = DotNetObjectReference.Create(this)
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupDropZone", "drop-zone", objRef).AsTask()
 
-            if not isRendering then
+            /// Snapshot of what would need (re)rendering right now.
+            let pendingWork () =
                 let ok = okFiles currentModel
 
                 if ok.IsEmpty then
-                    lastFilesKey <- None
-                    lastMagnitudeKey <- None
-
-                    if currentModel.Status.IsSome then
-                        this.Dispatch(SetStatus None)
+                    None
                 else
                     let filesKey = ok |> List.map fst |> String.concat "|"
                     let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
@@ -280,18 +277,39 @@ type App() =
                         + "##"
                         + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
 
-                    // Magnitude redraws on file OR parameter-selection changes;
-                    // phase and Smith only care about the files, so toggling a
-                    // parameter checkbox doesn't force two unrelated redraws.
-                    let needsMagnitude = lastMagnitudeKey <> Some magnitudeKey
-                    let needsFiles = lastFilesKey <> Some filesKey
+                    Some(ok, selected, filesKey, magnitudeKey)
 
-                    if needsMagnitude || needsFiles then
-                        isRendering <- true
+            if not isRendering then
+                match pendingWork () with
+                | None ->
+                    lastFilesKey <- None
+                    lastMagnitudeKey <- None
+
+                    if currentModel.Status.IsSome then
+                        this.Dispatch(SetStatus None)
+                | Some(_, _, filesKey, magnitudeKey) when
+                    lastFilesKey = Some filesKey && lastMagnitudeKey = Some magnitudeKey
+                    ->
+                    if currentModel.Status.IsSome then
+                        this.Dispatch(SetStatus None)
+                | Some _ ->
+                    isRendering <- true
+                    this.Dispatch(SetStatus(Some "Downsampling & rendering charts…"))
+                    // WASM is single-threaded: without yielding here, the browser
+                    // never gets a chance to paint the status before the
+                    // downsampling/JSON-building below blocks it. Files dropped
+                    // together may still be trickling in while we yield, so the
+                    // actual render below re-reads currentModel from scratch
+                    // instead of trusting this pre-yield snapshot.
+                    do! Task.Delay 1
+
+                    match pendingWork () with
+                    | None -> ()
+                    | Some(ok, selected, filesKey, magnitudeKey) ->
+                        let needsMagnitude = lastMagnitudeKey <> Some magnitudeKey
+                        let needsFiles = lastFilesKey <> Some filesKey
                         lastMagnitudeKey <- Some magnitudeKey
                         lastFilesKey <- Some filesKey
-                        this.Dispatch(SetStatus(Some "Downsampling & rendering charts…"))
-                        do! Task.Delay 1
 
                         let render (divId: string) (chart: GenericChart.GenericChart) : Task =
                             this.JSRuntime
@@ -310,10 +328,8 @@ type App() =
                             | Some chart -> do! render "chart-smith" chart
                             | None -> ()
 
-                        this.Dispatch(SetStatus None)
-                        isRendering <- false
-                    elif currentModel.Status.IsSome then
-                        this.Dispatch(SetStatus None)
+                    this.Dispatch(SetStatus None)
+                    isRendering <- false
         }
         :> Task
 
