@@ -58,12 +58,43 @@ window.touchstoneInterop = {
     // redraw already-rendered charts without needing new data from .NET.
     _lastFigures: {},
 
+    // Print-style export: white paper, black grid/axes/text, black curves
+    // thicker than the gridlines. Traces with showlegend === false are the
+    // Smith chart's background resistance/reactance circles (drawn as plain
+    // traces, not real Plotly gridlines) — kept grid-thin instead of
+    // data-thick so they don't become indistinguishable from the actual S11/
+    // S22 curve.
+    _monochromeLayout: function (layout) {
+        layout = Object.assign({}, layout, {
+            paper_bgcolor: '#ffffff',
+            plot_bgcolor: '#ffffff',
+            font: Object.assign({}, layout.font, { color: '#000000' }),
+        });
+        const axisIds = Object.keys(layout).filter((k) => /^(xaxis|yaxis)\d*$/.test(k));
+        axisIds.forEach((k) => {
+            layout[k] = Object.assign({}, layout[k], {
+                gridcolor: '#000000',
+                zerolinecolor: '#000000',
+                linecolor: '#000000',
+            });
+        });
+        return layout;
+    },
+
+    _monochromeData: function (data) {
+        return data.map((trace) => {
+            const isGridLine = trace.showlegend === false;
+            return Object.assign({}, trace, {
+                line: Object.assign({}, trace.line, { color: '#000000', width: isGridLine ? 1 : 2.5 }),
+            });
+        });
+    },
+
     // JPEG has no alpha channel, so a transparent/dark-mode background would
-    // export as black, and the dark-mode axis/font colors (light gray, for
-    // contrast on a dark page) would be nearly invisible on it too. Swap the
-    // whole chart to its untethemed (light) figure just for the download,
-    // then swap back — replaces the default camera button since its own
-    // download path always captures the current on-screen colors as-is.
+    // export as black. Swap the whole chart to a monochrome print-style
+    // figure just for the download, then swap back — replaces the default
+    // camera button since its own download path always captures the current
+    // on-screen colors as-is.
     _config: function (divId) {
         return {
             responsive: true,
@@ -75,8 +106,9 @@ window.touchstoneInterop = {
                     icon: Plotly.Icons.camera,
                     click: function (gd) {
                         const fig = window.touchstoneInterop._lastFigures[divId];
-                        const lightLayout = Object.assign({}, fig.layout, { colorway: window.touchstoneInterop._colorway });
-                        Plotly.react(divId, fig.data, lightLayout, window.touchstoneInterop._config(divId))
+                        const monoLayout = window.touchstoneInterop._monochromeLayout(fig.layout);
+                        const monoData = window.touchstoneInterop._monochromeData(fig.data);
+                        Plotly.react(divId, monoData, monoLayout, window.touchstoneInterop._config(divId))
                             .then(() => Plotly.downloadImage(gd, { format: 'jpeg', filename: divId }))
                             .then(() =>
                                 Plotly.react(
