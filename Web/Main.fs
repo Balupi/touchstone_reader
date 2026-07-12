@@ -169,7 +169,11 @@ let private chartSection
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
-        attr.``class`` "container mt-5"
+        attr.``class`` "container mt-5 px-4"
+        // Wider than Bulma's default breakpoint-capped container (960px):
+        // the magnitude/phase quad grid alone is already 900px, leaving
+        // little room to breathe. Still centers and shrinks fine below this.
+        attr.style "max-width: 1400px;"
 
         h1 {
             attr.``class`` "title"
@@ -196,7 +200,14 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
             attr.id "drop-zone"
             attr.``for`` "file-input"
             attr.``class`` "box has-text-centered"
-            attr.style "border: 2px dashed #999; padding: 3rem; cursor: pointer; display: block;"
+
+            attr.style
+                "border: 2px dashed #999; padding: 3rem; cursor: pointer; display: block; transition: border-color 0.15s ease, background-color 0.15s ease;"
+
+            p {
+                attr.``class`` "is-size-1 mb-2"
+                "📤"
+            }
 
             p {
                 attr.``class`` "is-size-5"
@@ -327,6 +338,7 @@ type App() =
             if firstRender then
                 let objRef = DotNetObjectReference.Create(this)
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupDropZone", "drop-zone", objRef).AsTask()
+                do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.bindThemeListener").AsTask()
 
             // Binds the collapse/expand resize fix on any <details> that
             // appeared since the last render; no-ops on ones already bound.

@@ -3,10 +3,42 @@
 
 <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TouchstoneReader</title>
     <base href="/" />
+    <link rel="icon"
+        href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzQ4NWZjNyIvPjxwYXRoIGQ9Ik00IDIwIFE4IDkgMTIgMjAgVDIwIDIwIFQyOCAxMSIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjIuNiIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css" />
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        /* Custom chevron replacing the plain browser disclosure marker, so
+           each collapsible chart section reads clearly as expand/collapse. */
+        .chart-section>summary {
+            list-style: none;
+        }
+
+        .chart-section>summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .chart-section>summary::before {
+            content: "▶";
+            display: inline-block;
+            width: 1em;
+            font-size: 0.8em;
+            transition: transform 0.15s ease;
+        }
+
+        .chart-section[open]>summary::before {
+            transform: rotate(90deg);
+        }
+
+        /* Highlighted while a drag is over the drop zone. */
+        #drop-zone.is-dragover {
+            border-color: #485fc7 !important;
+            background-color: rgba(72, 95, 199, 0.08);
+        }
+    </style>
 </head>
 
 <body>
