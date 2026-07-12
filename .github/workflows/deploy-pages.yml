@@ -1,0 +1,55 @@
+name: Deploy web app to GitHub Pages
+
+on:
+  push:
+    branches: [web-frontend]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy at a time; let an in-flight one finish rather than cancel it
+# mid-upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish
+        run: dotnet publish Web/TouchstoneReader.Web.fsproj -c Release -o publish
+
+      # GitHub Pages serves a project site at /<repo>/, not /, so the SPA's
+      # base href (used to resolve every relative asset, including the WASM
+      # runtime under _framework/) has to match that subpath.
+      - name: Fix base href for the project-site subpath
+        run: sed -i 's|<base href="/" />|<base href="/${{ github.event.repository.name }}/" />|' publish/wwwroot/index.html
+
+      # Without this, GitHub Pages' Jekyll processing silently drops the
+      # _framework/ folder (leading underscore), breaking the app.
+      - name: Add .nojekyll
+        run: touch publish/wwwroot/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: publish/wwwroot
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
