@@ -21,10 +21,36 @@ dotnet run --project Web/TouchstoneReader.Web.fsproj
 ```
 
 Starts a local dev server (default `http://localhost:5000`) with a page to drag
-and drop a Touchstone file onto — it's parsed entirely in the browser (Blazor
+and drop one or more Touchstone files onto. Everything runs client-side (Blazor
 WebAssembly via [Bolero](https://fsbolero.io), Elmish architecture, Bulma
-styling) and renders the same magnitude, phase, and Smith charts as the CLI.
-No file is ever uploaded anywhere.
+styling) — files are parsed in the browser and never uploaded anywhere. Drop
+several files at once to overlay them for comparison; each can be removed
+individually.
+
+Results are grouped into four collapsible sections (Magnitude open by
+default, the rest collapsed), each with its own S-parameter toggle buttons
+scoped to what it can show:
+
+- **Magnitude (dB)** / **Phase (deg)** — S11/S21/S12/S22, laid out as a
+  VNA-style quad grid (1–4 panels depending on the selection).
+- **Smith Chart** — S11/S22 (the reflection coefficients).
+- **Group Delay (ns)** — S21/S12 (the transmission coefficients),
+  `-1/(2π) · dφ/df` with the phase unwrapped first.
+
+A status line reports parsing/rendering progress, and large sweeps (into the
+thousands of points) are downsampled per trace via Largest-Triangle-Three-
+Buckets before charting, so the page stays responsive without losing narrow
+resonances or notches. Charts follow the browser's light/dark theme; the
+download button on each chart always exports a black-on-white print-style
+JPEG regardless of the on-screen theme.
+
+### Deploy to GitHub Pages
+
+`.github/workflows/deploy-pages.yml` publishes the web app and deploys it as
+a GitHub Pages project site on every push to `web-frontend` (or via manual
+dispatch from the Actions tab). One-time setup: in the repo's **Settings →
+Pages**, set **Source** to **GitHub Actions**. The site then lives at
+`https://<owner>.github.io/<repo>/`.
 
 ## Use as a library
 
