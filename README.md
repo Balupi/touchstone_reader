@@ -10,7 +10,9 @@ dotnet run -- path/to/file.s2p
 ```
 
 Prints a summary and opens magnitude (dB) and phase (deg) charts, overlaying every
-parameter (S11, S21, ... or Y/Z/H/G equivalents), in your default browser.
+parameter (S11, S21, ... or Y/Z/H/G equivalents), in your default browser. For
+S-parameter files, also opens a Smith chart of the input reflection coefficients
+(S11, S22, ...).
 
 ## Use as a library
 
@@ -23,6 +25,7 @@ let data = Touchstone.read "amplifier.s2p"
 
 magnitudeChart data |> Chart.show
 magnitudeGrid data |> Chart.show   // small-multiples, one chart per Sij
+smithChart data |> Chart.show      // S-parameters only: Sii on a Smith grid
 ```
 
 ## Coverage
