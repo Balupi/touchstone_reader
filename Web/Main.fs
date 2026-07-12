@@ -220,16 +220,20 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 if model.SelectedParams.IsEmpty then
                                     p {
                                         attr.``class`` "has-text-grey"
-                                        "Select at least one S-parameter above to show the magnitude plot."
+                                        "Select at least one S-parameter above to show the magnitude and phase plots."
                                     }
                                 else
-                                    chartSection "Magnitude (dB)" true "chart-magnitude"
+                                    concat {
+                                        chartSection "Magnitude (dB)" true "chart-magnitude"
+                                        chartSection "Phase (deg)" false "chart-phase"
+                                    }
                             }
-
-                        chartSection "Phase (deg)" false "chart-phase"
 
                         if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
                             chartSection "Smith Chart" false "chart-smith"
+
+                        if has2Port then
+                            chartSection "Group Delay (ns)" false "chart-group-delay"
                     }
             }
     }
@@ -239,7 +243,7 @@ type App() =
 
     let mutable currentModel = initModel
     let mutable lastFilesKey: string option = None
-    let mutable lastMagnitudeKey: string option = None
+    let mutable lastQuadKey: string option = None
     // Guards against the render triggered by our own SetStatus dispatch
     // re-entering this method (Blazor calls OnAfterRenderAsync after every
     // render) and racing to redo or prematurely clear the same work.
@@ -286,24 +290,22 @@ type App() =
                     let filesKey = ok |> List.map fst |> String.concat "|"
                     let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
 
-                    let magnitudeKey =
+                    let quadKey =
                         filesKey
                         + "##"
                         + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
 
-                    Some(ok, selected, filesKey, magnitudeKey)
+                    Some(ok, selected, filesKey, quadKey)
 
             if not isRendering then
                 match pendingWork () with
                 | None ->
                     lastFilesKey <- None
-                    lastMagnitudeKey <- None
+                    lastQuadKey <- None
 
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
-                | Some(_, _, filesKey, magnitudeKey) when
-                    lastFilesKey = Some filesKey && lastMagnitudeKey = Some magnitudeKey
-                    ->
+                | Some(_, _, filesKey, quadKey) when lastFilesKey = Some filesKey && lastQuadKey = Some quadKey ->
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
                 | Some _ ->
@@ -319,10 +321,14 @@ type App() =
 
                     match pendingWork () with
                     | None -> ()
-                    | Some(ok, selected, filesKey, magnitudeKey) ->
-                        let needsMagnitude = lastMagnitudeKey <> Some magnitudeKey
+                    | Some(ok, selected, filesKey, quadKey) ->
+                        // Magnitude+phase redraw on file OR parameter-selection
+                        // changes; Smith and group delay only care about the
+                        // files, so toggling a parameter checkbox doesn't force
+                        // two unrelated redraws along with it.
+                        let needsQuad = lastQuadKey <> Some quadKey
                         let needsFiles = lastFilesKey <> Some filesKey
-                        lastMagnitudeKey <- Some magnitudeKey
+                        lastQuadKey <- Some quadKey
                         lastFilesKey <- Some filesKey
 
                         let render (divId: string) (chart: GenericChart.GenericChart) : Task =
@@ -330,16 +336,22 @@ type App() =
                                 .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
                                 .AsTask()
 
-                        if needsMagnitude then
+                        if needsQuad then
                             match magnitudeQuadMulti selected ok with
                             | Some chart -> do! render "chart-magnitude" chart
                             | None -> ()
 
-                        if needsFiles then
-                            do! render "chart-phase" (phaseChartMulti ok)
+                            match phaseQuadMulti selected ok with
+                            | Some chart -> do! render "chart-phase" chart
+                            | None -> ()
 
+                        if needsFiles then
                             match smithChartMulti ok with
                             | Some chart -> do! render "chart-smith" chart
+                            | None -> ()
+
+                            match groupDelayChartMulti ok with
+                            | Some chart -> do! render "chart-group-delay" chart
                             | None -> ()
 
                     this.Dispatch(SetStatus None)

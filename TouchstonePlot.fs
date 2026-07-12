@@ -132,12 +132,17 @@ let magnitudeGrid (data: TouchstoneFile) =
 /// bottom-left, S22 bottom-right.
 let magnitudeQuadOrder = [ (1, 1); (2, 1); (1, 2); (2, 2) ]
 
-/// Grid of magnitude (dB) subplots for 2-port S-parameter files, one per
-/// selected (i,j) parameter (e.g. `[ (1,1); (2,1) ]` for S11+S21), laid out
-/// left-to-right top-to-bottom in up to 2 columns. Each subplot overlays
-/// every labeled file's trace for that parameter; files that aren't 2-port
-/// are skipped. Returns None if `selected` is empty.
-let magnitudeQuadMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+/// Grid of subplots for 2-port files, one per selected (i,j) parameter (e.g.
+/// `[ (1,1); (2,1) ]` for S11+S21), laid out left-to-right top-to-bottom in
+/// up to 2 columns. Each subplot overlays every labeled file's trace for
+/// that parameter (`toY` picks the scalar plotted); files that aren't
+/// 2-port are skipped. Returns None if `selected` is empty.
+let private quadMulti
+    (title: string)
+    (toY: Complex -> float)
+    (selected: (int * int) list)
+    (files: (string * TouchstoneFile) list)
+    =
     if selected.IsEmpty then
         None
     else
@@ -148,7 +153,7 @@ let magnitudeQuadMulti (selected: (int * int) list) (files: (string * Touchstone
         // axes — so the per-cell label goes on the Y axis instead.
         let subplot (i, j) =
             files2p
-            |> List.map (fun (label, data) -> oneParamTrace label toDb i j data)
+            |> List.map (fun (label, data) -> oneParamTrace label toY i j data)
             |> Chart.combine
             |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
 
@@ -158,9 +163,15 @@ let magnitudeQuadMulti (selected: (int * int) list) (files: (string * Touchstone
         selected
         |> List.map subplot
         |> Chart.Grid(rows, cols)
-        |> Chart.withTitle "Magnitude (dB)"
+        |> Chart.withTitle title
         |> Chart.withSize (450 * cols, 350 * rows)
         |> Some
+
+/// Grid of magnitude (dB) subplots — see quadMulti.
+let magnitudeQuadMulti selected files = quadMulti "Magnitude (dB)" toDb selected files
+
+/// Grid of phase (deg) subplots — see quadMulti.
+let phaseQuadMulti selected files = quadMulti "Phase (deg)" toDeg selected files
 
 let private circlePoints (cx: float) (cy: float) (r: float) (n: int) =
     [| for k in 0 .. n ->
@@ -265,6 +276,65 @@ let smithChartMulti (files: (string * TouchstoneFile) list) =
         |> (@) (smithGrid ())
         |> Chart.combine
         |> smithLayout
+        |> Some
+
+/// Unwraps a sequence of angles (radians) so consecutive jumps greater than
+/// π get folded by ±2π, producing a continuous curve. Raw S-parameter phase
+/// wraps at ±180°; differentiating it unwrapped would produce spurious
+/// spikes at every wrap instead of the actual group delay.
+let private unwrap (radians: float[]) =
+    let result = Array.copy radians
+    let mutable offset = 0.0
+
+    for i in 1 .. result.Length - 1 do
+        let delta = radians.[i] - radians.[i - 1]
+
+        if delta > Math.PI then
+            offset <- offset - 2.0 * Math.PI
+        elif delta < -Math.PI then
+            offset <- offset + 2.0 * Math.PI
+
+        result.[i] <- radians.[i] + offset
+
+    result
+
+/// Group delay in ns: -1/(2π) · dφ/df, with φ unwrapped (radians) and f in
+/// Hz. Central difference in the interior, one-sided at the endpoints.
+let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneFile) =
+    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+    let phases = data.Matrices |> Array.map (fun m -> m.[i, j].Phase) |> unwrap
+    let n = phases.Length
+
+    let delayNs =
+        Array.init n (fun k ->
+            if n < 2 then
+                0.0
+            else
+                let lo, hi = max 0 (k - 1), min (n - 1) (k + 1)
+                let dPhi = phases.[hi] - phases.[lo]
+                let dF = data.Frequencies.[hi] - data.Frequencies.[lo]
+                if dF = 0.0 then 0.0 else -1e9 * dPhi / (2.0 * Math.PI * dF))
+
+    let points = Array.zip freqGHz delayNs |> lttb maxPointsPerTrace
+    let name = sprintf "%A%d%d" data.Option.Parameter i j
+    let name = if label = "" then name else sprintf "%s %s" label name
+    Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
+
+/// Group delay (ns) of the two transmission parameters (S21 and S12, or the
+/// Y/Z/... equivalents) vs frequency (GHz), overlaid across labeled 2-port
+/// files. Returns None if none of the files are 2-port.
+let groupDelayChartMulti (files: (string * TouchstoneFile) list) =
+    let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
+
+    if files2p.IsEmpty then
+        None
+    else
+        files2p
+        |> List.collect (fun (label, data) -> [ groupDelayTrace label 2 1 data; groupDelayTrace label 1 2 data ])
+        |> Chart.combine
+        |> Chart.withTitle "Group Delay (ns)"
+        |> Chart.withXAxisStyle "Frequency (GHz)"
+        |> Chart.withYAxisStyle "Group Delay (ns)"
         |> Some
 
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.
