@@ -98,29 +98,41 @@ let private chartSection
     }
 
 /// Absolute-vs-deviation-from-mean switch for the Group Delay section; only
-/// meaningful (and shown) once 2+ files are actually comparable.
+/// meaningful (and shown) once 2+ files are actually comparable. Styled as a
+/// single connected (`has-addons`) segmented control behind a "Display:"
+/// label, so it doesn't read as more S-parameter toggle buttons like the
+/// individually-clickable ones above it.
 let private groupDelayModeToggle (dispatch: Dispatch<Message>) (mode: DisplayMode) (comparableFileCount: int) =
     if comparableFileCount < 2 then
         empty ()
     else
         div {
-            attr.``class`` "field is-grouped mb-3"
+            attr.``class`` "field is-grouped is-align-items-center mb-3"
 
-            button {
-                attr.``class`` (if mode = Absolute then "button is-small is-info mr-2" else "button is-small mr-2")
-                on.click (fun _ -> dispatch (SetGroupDelayMode Absolute))
-                "Absolute"
+            p {
+                attr.``class`` "mr-2 has-text-grey"
+                "Display:"
             }
 
-            button {
-                attr.``class``
-                    (if mode = DeviationFromMean then
-                         "button is-small is-info mr-2"
-                     else
-                         "button is-small mr-2")
+            div {
+                attr.``class`` "buttons has-addons mb-0"
 
-                on.click (fun _ -> dispatch (SetGroupDelayMode DeviationFromMean))
-                "Δ from mean"
+                button {
+                    attr.``class`` (if mode = Absolute then "button is-small is-info is-selected" else "button is-small")
+                    on.click (fun _ -> dispatch (SetGroupDelayMode Absolute))
+                    "Absolute"
+                }
+
+                button {
+                    attr.``class``
+                        (if mode = DeviationFromMean then
+                             "button is-small is-info is-selected"
+                         else
+                             "button is-small")
+
+                    on.click (fun _ -> dispatch (SetGroupDelayMode DeviationFromMean))
+                    "Δ from mean"
+                }
             }
         }
 
