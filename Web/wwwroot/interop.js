@@ -29,5 +29,19 @@ window.touchstoneInterop = {
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.
         Plotly.react(divId, fig.data, fig.layout, { responsive: true });
+    },
+
+    // A chart drawn while its <details> is collapsed measures its container
+    // as 0x0. Resize it once the section is actually expanded. Safe to call
+    // repeatedly: already-bound elements are skipped.
+    setupCollapsibleCharts: function () {
+        document.querySelectorAll('details.chart-section').forEach((details) => {
+            if (details.dataset.resizeBound) return;
+            details.dataset.resizeBound = 'true';
+            details.addEventListener('toggle', () => {
+                if (!details.open) return;
+                details.querySelectorAll('.js-plotly-plot').forEach((el) => Plotly.Plots.resize(el));
+            });
+        });
     }
 };

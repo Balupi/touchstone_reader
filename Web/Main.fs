@@ -72,7 +72,7 @@ let private okFiles (model: Model) =
         | Ok data -> Some(f.FileName, data)
         | Error _ -> None)
 
-let private summary (data: TouchstoneFile) =
+let private fileSummary (data: TouchstoneFile) =
     sprintf
         "%d-port, %d frequency points, %A parameters (%A, R=%.0f Ω)"
         data.Ports
@@ -89,7 +89,7 @@ let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
 
     let text =
         match f.Data with
-        | Ok data -> sprintf "%s — %s" f.FileName (summary data)
+        | Ok data -> sprintf "%s — %s" f.FileName (fileSummary data)
         | Error msg -> sprintf "%s — %s" f.FileName msg
 
     div {
@@ -110,6 +110,25 @@ let private paramToggle (dispatch: Dispatch<Message>) (selected: Set<int * int>)
         attr.``class`` (if isOn then "button is-small is-info mr-2" else "button is-small mr-2")
         on.click (fun _ -> dispatch (ToggleParam(i, j)))
         sprintf "S%d%d" i j
+    }
+
+/// A collapsible <details> section housing one chart's container div.
+/// `open`'s toggle event doesn't rebuild the Plotly chart, so interop.js
+/// resizes it on expand — otherwise a chart drawn while hidden renders at 0
+/// size and never fixes itself.
+let private chartSection (title: string) (isOpenByDefault: bool) (divId: string) =
+    details {
+        attr.``class`` "chart-section box mt-4"
+
+        if isOpenByDefault then attr.``open`` true else attr.empty ()
+
+        summary {
+            attr.``class`` "title is-5"
+            attr.style "cursor: pointer;"
+            title
+        }
+
+        div { attr.id divId }
     }
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
@@ -204,22 +223,13 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                         "Select at least one S-parameter above to show the magnitude plot."
                                     }
                                 else
-                                    div {
-                                        attr.id "chart-magnitude"
-                                        attr.``class`` "mt-2"
-                                    }
+                                    chartSection "Magnitude (dB)" true "chart-magnitude"
                             }
 
-                        div {
-                            attr.id "chart-phase"
-                            attr.``class`` "mt-4"
-                        }
+                        chartSection "Phase (deg)" false "chart-phase"
 
                         if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
-                            div {
-                                attr.id "chart-smith"
-                                attr.``class`` "mt-4"
-                            }
+                            chartSection "Smith Chart" false "chart-smith"
                     }
             }
     }
@@ -261,6 +271,10 @@ type App() =
             if firstRender then
                 let objRef = DotNetObjectReference.Create(this)
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupDropZone", "drop-zone", objRef).AsTask()
+
+            // Binds the collapse/expand resize fix on any <details> that
+            // appeared since the last render; no-ops on ones already bound.
+            do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupCollapsibleCharts").AsTask()
 
             /// Snapshot of what would need (re)rendering right now.
             let pendingWork () =
