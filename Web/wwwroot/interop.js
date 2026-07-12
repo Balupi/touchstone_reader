@@ -36,9 +36,16 @@ window.touchstoneInterop = {
     // wasted space in a wide container, overflow in a narrow one. Drop it and
     // let Plotly measure the container's actual width instead; layout.height
     // stays fixed (already sized per chart, e.g. taller for a 2-row grid).
+    //
+    // Also turns on unified hover (one tooltip listing every trace at the
+    // hovered x, instead of one per curve) for frequency-x-axis charts —
+    // Magnitude/Phase/Group Delay — but not the Smith chart, whose x-axis is
+    // Re(Γ) rather than frequency and reads better with normal per-point hover.
     _makeResponsive: function (layout) {
         layout = Object.assign({}, layout, { autosize: true })
         delete layout.width
+        const isSmith = layout.xaxis && layout.xaxis.title && layout.xaxis.title.text === 'Re(Γ)'
+        if (!isSmith) layout.hovermode = 'x unified'
         return layout
     },
 
@@ -108,6 +115,19 @@ window.touchstoneInterop = {
     // figure just for the download, then swap back — replaces the default
     // camera button since its own download path always captures the current
     // on-screen colors as-is.
+    // Triggers a browser download of `text` as `filename` via a throwaway
+    // Blob URL + synthetic anchor click — no server round-trip needed since
+    // the CSV is already fully built on the .NET side.
+    _downloadText: function (filename, text) {
+        const blob = new Blob([text], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    },
+
     _config: function (divId) {
         return {
             responsive: true,
@@ -133,14 +153,24 @@ window.touchstoneInterop = {
                             );
                     },
                 },
+                {
+                    name: 'downloadCsv',
+                    title: 'Download data as csv',
+                    icon: Plotly.Icons.disk,
+                    click: function () {
+                        const fig = window.touchstoneInterop._lastFigures[divId];
+                        if (fig && fig.csv) window.touchstoneInterop._downloadText(divId + '.csv', fig.csv);
+                    },
+                },
             ],
         };
     },
 
-    renderChart: function (divId, figureJson) {
+    renderChart: function (divId, figureJson, csv) {
         const el = document.getElementById(divId);
         if (!el) return;
         const fig = JSON.parse(figureJson);
+        fig.csv = csv;
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.

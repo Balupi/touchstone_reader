@@ -131,34 +131,39 @@ type App() =
                         lastSmithKey <- Some w.SmithKey
                         lastGroupDelayKey <- Some w.GdKey
 
-                        let render (divId: string) (chart: GenericChart.GenericChart) : Task =
+                        let render (divId: string) (result: ChartResult) : Task =
                             this.JSRuntime
-                                .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
+                                .InvokeVoidAsync(
+                                    "touchstoneInterop.renderChart",
+                                    divId,
+                                    GenericChart.toFigureJson result.Chart,
+                                    result.Csv
+                                )
                                 .AsTask()
 
                         if needsMagnitude then
                             match magnitudeQuadMulti w.MagSelected w.Ok with
-                            | Some chart -> do! render "chart-magnitude" chart
+                            | Some result -> do! render "chart-magnitude" result
                             | None -> ()
 
                         if needsPhase then
                             match phaseQuadMulti w.PhaseSelected w.Ok with
-                            | Some chart -> do! render "chart-phase" chart
+                            | Some result -> do! render "chart-phase" result
                             | None -> ()
 
                         if needsSmith then
                             match smithChartMulti w.SmithSelected w.Ok with
-                            | Some chart -> do! render "chart-smith" chart
+                            | Some result -> do! render "chart-smith" result
                             | None -> ()
 
                         if needsGroupDelay then
-                            let chart =
+                            let result =
                                 match w.GdMode with
                                 | Absolute -> groupDelayChartMulti w.GdSelected w.Ok
                                 | DeviationFromMean -> groupDelayDeviationChartMulti w.GdSelected w.Ok
 
-                            match chart with
-                            | Some chart -> do! render "chart-group-delay" chart
+                            match result with
+                            | Some result -> do! render "chart-group-delay" result
                             | None -> ()
 
                     this.Dispatch(SetStatus None)

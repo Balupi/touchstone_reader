@@ -64,6 +64,70 @@ let private lttb (threshold: int) (points: (float * float)[]) =
         sampled.Add points.[n - 1]
         sampled.ToArray()
 
+/// A rendered chart plus a CSV rendition of the same (non-downsampled) data,
+/// for the web app's per-chart CSV download button. The single-file/CLI
+/// chart functions don't need this — only the web app's multi-file `*Multi`
+/// functions return it.
+type ChartResult =
+    { Chart: GenericChart.GenericChart
+      Csv: string }
+
+/// CSV with each series as its own "label"/"label" x/y column pair —
+/// ragged (shorter series get blank cells) rather than interpolated onto a
+/// shared grid, since files can have different frequency points and
+/// interpolating would silently alter the real measured values.
+let private toCsv (xLabel: string) (yLabel: string) (series: (string * float[] * float[]) list) =
+    let maxLen = series |> List.map (fun (_, xs, _) -> xs.Length) |> List.fold max 0
+
+    let header =
+        series
+        |> List.collect (fun (label, _, _) ->
+            [ sprintf "\"%s %s\"" label xLabel |> fun s -> s.Trim()
+              sprintf "\"%s %s\"" label yLabel |> fun s -> s.Trim() ])
+        |> String.concat ","
+
+    let row r =
+        series
+        |> List.collect (fun (_, xs, ys) -> if r < xs.Length then [ string xs.[r]; string ys.[r] ] else [ ""; "" ])
+        |> String.concat ","
+
+    header + "\n" + ([ for r in 0 .. maxLen - 1 -> row r ] |> String.concat "\n")
+
+/// Annotates the global minimum and maximum across several (label, xs, ys)
+/// series in one subplot with the file+value they came from, instead of one
+/// marker pair per file (which gets noisy fast with several files loaded).
+let private extremumAnnotations (xref: string) (yref: string) (unit: string) (series: (string * float[] * float[]) list) =
+    let flat =
+        [ for (label, xs, ys) in series do
+            for k in 0 .. ys.Length - 1 -> label, xs.[k], ys.[k] ]
+
+    match flat with
+    | [] -> []
+    | _ ->
+        let annotate kind (label: string, x, y) =
+            let text =
+                if label = "" then
+                    sprintf "%s: %.3g%s" kind y unit
+                else
+                    sprintf "%s %s: %.3g%s" label kind y unit
+
+            // No explicit font color or background: both inherit from
+            // layout.font, which interop.js already patches per light/dark
+            // theme — a fixed color here would go illegible under the other theme.
+            Annotation.init (
+                X = x,
+                Y = y,
+                XRef = xref,
+                YRef = yref,
+                Text = text,
+                ShowArrow = true,
+                ArrowSize = 0.6,
+                Font = Font.init (Size = 10.0)
+            )
+
+        [ annotate "Min" (flat |> List.minBy (fun (_, _, y) -> y))
+          annotate "Max" (flat |> List.maxBy (fun (_, _, y) -> y)) ]
+
 /// One line trace for Sij (or Yij/Zij/...) of one file, `toY` picking the
 /// scalar to plot from each complex value. `label` (e.g. a filename) is
 /// prepended to the trace name when overlaying multiple files; pass "" for none.
@@ -136,10 +200,14 @@ let magnitudeQuadOrder = [ (1, 1); (2, 1); (1, 2); (2, 2) ]
 /// `[ (1,1); (2,1) ]` for S11+S21), laid out left-to-right top-to-bottom in
 /// up to 2 columns. Each subplot overlays every labeled file's trace for
 /// that parameter (`toY` picks the scalar plotted); files that aren't
-/// 2-port are skipped. Returns None if `selected` is empty.
+/// 2-port are skipped. When `showExtrema` is set, each subplot is annotated
+/// with the global min/max across all its overlaid files. Returns None if
+/// `selected` is empty.
 let private quadMulti
     (title: string)
+    (unit: string)
     (toY: Complex -> float)
+    (showExtrema: bool)
     (selected: (int * int) list)
     (files: (string * TouchstoneFile) list)
     =
@@ -151,27 +219,53 @@ let private quadMulti
         // Chart.Grid collapses a per-subplot Chart.withTitle into one shared
         // title (only the last one wins), but each subplot keeps its own
         // axes — so the per-cell label goes on the Y axis instead.
-        let subplot (i, j) =
-            files2p
-            |> List.map (fun (label, data) -> oneParamTrace label toY i j data)
-            |> Chart.combine
-            |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
+        let subplot idx (i, j) =
+            let series =
+                files2p
+                |> List.map (fun (label, data) ->
+                    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+                    let ys = data.Matrices |> Array.map (fun m -> toY m.[i, j])
+                    (sprintf "%s S%d%d" label i j).Trim(), freqGHz, ys)
+
+            let chart =
+                files2p
+                |> List.map (fun (label, data) -> oneParamTrace label toY i j data)
+                |> Chart.combine
+                |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
+
+            let annotations =
+                if showExtrema then
+                    let xref = if idx = 0 then "x" else sprintf "x%d" (idx + 1)
+                    let yref = if idx = 0 then "y" else sprintf "y%d" (idx + 1)
+                    extremumAnnotations xref yref unit series
+                else
+                    []
+
+            chart, annotations, series
 
         let cols = min 2 selected.Length
         let rows = (selected.Length + cols - 1) / cols
 
-        selected
-        |> List.map subplot
-        |> Chart.Grid(rows, cols)
-        |> Chart.withTitle title
-        |> Chart.withSize (450 * cols, 350 * rows)
-        |> Some
+        let results = selected |> List.mapi subplot
+        let annotations = results |> List.collect (fun (_, a, _) -> a)
+        let allSeries = results |> List.collect (fun (_, _, s) -> s)
 
-/// Grid of magnitude (dB) subplots — see quadMulti.
-let magnitudeQuadMulti selected files = quadMulti "Magnitude (dB)" toDb selected files
+        let chart =
+            results
+            |> List.map (fun (c, _, _) -> c)
+            |> Chart.Grid(rows, cols)
+            |> Chart.withTitle title
+            |> Chart.withSize (450 * cols, 350 * rows)
+            |> fun c -> if annotations.IsEmpty then c else Chart.withAnnotations annotations c
 
-/// Grid of phase (deg) subplots — see quadMulti.
-let phaseQuadMulti selected files = quadMulti "Phase (deg)" toDeg selected files
+        Some { Chart = chart; Csv = toCsv "Frequency (GHz)" unit allSeries }
+
+/// Grid of magnitude (dB) subplots, each annotated with its global min/max — see quadMulti.
+let magnitudeQuadMulti selected files = quadMulti "Magnitude (dB)" "dB" toDb true selected files
+
+/// Grid of phase (deg) subplots — see quadMulti. No min/max annotations:
+/// wrapped phase makes a single global extremum meaningless.
+let phaseQuadMulti selected files = quadMulti "Phase (deg)" "deg" toDeg false selected files
 
 let private circlePoints (cx: float) (cy: float) (r: float) (n: int) =
     [| for k in 0 .. n ->
@@ -269,8 +363,9 @@ let smithChart (data: TouchstoneFile) =
 
 /// Smith chart overlaying the selected reflection coefficients (e.g.
 /// `[ (1,1); (2,2) ]` for S11+S22) of several labeled S-parameter files
-/// (e.g. filenames); non-S-parameter files are ignored. Returns None if
-/// `selected` is empty or none of the files are S-parameter data.
+/// (e.g. filenames); non-S-parameter files are ignored. No min/max
+/// annotations — a 2D trajectory has no single meaningful extremum. Returns
+/// None if `selected` is empty or none of the files are S-parameter data.
 let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
     if selected.IsEmpty then
         None
@@ -280,12 +375,22 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
         if sFiles.IsEmpty then
             None
         else
-            sFiles
-            |> List.collect (fun (label, data) -> smithTraces label selected data)
-            |> (@) (smithGrid ())
-            |> Chart.combine
-            |> smithLayout
-            |> Some
+            let series =
+                [ for (label, data) in sFiles do
+                    for (i, j) in selected do
+                        if i = j && i <= data.Ports then
+                            let gammas = data.Matrices |> Array.map (fun m -> m.[i, i])
+                            let name = (sprintf "%s S%d%d" label i i).Trim()
+                            name, (gammas |> Array.map (fun g -> g.Real)), (gammas |> Array.map (fun g -> g.Imaginary)) ]
+
+            let chart =
+                sFiles
+                |> List.collect (fun (label, data) -> smithTraces label selected data)
+                |> (@) (smithGrid ())
+                |> Chart.combine
+                |> smithLayout
+
+            Some { Chart = chart; Csv = toCsv "Re(Γ)" "Im(Γ)" series }
 
 /// Unwraps a sequence of angles (radians) so consecutive jumps greater than
 /// π get folded by ±2π, producing a continuous curve. Raw S-parameter phase
@@ -357,12 +462,13 @@ let private interpAt (xs: float[]) (ys: float[]) (x: float) =
         let y0, y1 = ys.[lo], ys.[hi]
         if x1 = x0 then y0 else y0 + (y1 - y0) * (x - x0) / (x1 - x0)
 
-/// One trace per file of Sij's group delay deviation (ns) from the pointwise
-/// mean across all of `files`. Files on a different frequency grid than the
-/// first are linearly interpolated onto it before averaging.
-let private groupDelayDeviationTraces (i: int) (j: int) (files: (string * TouchstoneFile) list) =
+/// One (trace, (label, freqGHz, deviation)) pair per file of Sij's group
+/// delay deviation (ns) from the pointwise mean across all of `files`. Files
+/// on a different frequency grid than the first are linearly interpolated
+/// onto it before averaging.
+let private groupDelayDeviationSeriesAndTraces (i: int) (j: int) (files: (string * TouchstoneFile) list) =
     match files with
-    | [] -> []
+    | [] -> [], []
     | (_, refData) :: _ ->
         let refFreqs = refData.Frequencies
         let n = refFreqs.Length
@@ -376,21 +482,25 @@ let private groupDelayDeviationTraces (i: int) (j: int) (files: (string * Touchs
 
         let freqGHz = refFreqs |> Array.map (fun f -> f / 1e9)
 
-        interpolated
-        |> List.map (fun (label, data, ys) ->
-            let deviation = Array.init n (fun k -> ys.[k] - mean.[k])
-            let points = Array.zip freqGHz deviation |> lttb maxPointsPerTrace
-            let name = sprintf "%A%d%d" data.Option.Parameter i j
-            let name = if label = "" then name else sprintf "%s %s" label name
-            Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name))
+        let results =
+            interpolated
+            |> List.map (fun (label, _data, ys) ->
+                let deviation = Array.init n (fun k -> ys.[k] - mean.[k])
+                let name = (sprintf "%s S%d%d" label i j).Trim()
+                let points = Array.zip freqGHz deviation |> lttb maxPointsPerTrace
+                let trace = Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
+                trace, (name, freqGHz, deviation))
+
+        results |> List.map fst, results |> List.map snd
 
 /// Transmission parameters selectable for group delay: S21, S12.
 let groupDelayOrder = [ (2, 1); (1, 2) ]
 
 /// Group delay (ns) of the selected transmission parameters (e.g.
 /// `[ (2,1); (1,2) ]` for S21+S12, or the Y/Z/... equivalents) vs frequency
-/// (GHz), overlaid across labeled 2-port files. Returns None if `selected`
-/// is empty or none of the files are 2-port.
+/// (GHz), overlaid across labeled 2-port files, annotated with the global
+/// min/max across all of them. Returns None if `selected` is empty or none
+/// of the files are 2-port.
 let groupDelayChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
     if selected.IsEmpty then
         None
@@ -400,21 +510,30 @@ let groupDelayChartMulti (selected: (int * int) list) (files: (string * Touchsto
         if files2p.IsEmpty then
             None
         else
-            files2p
-            |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace label i j data))
-            |> Chart.combine
-            |> Chart.withTitle "Group Delay (ns)"
-            |> Chart.withXAxisStyle "Frequency (GHz)"
-            |> Chart.withYAxisStyle "Group Delay (ns)"
-            |> Some
+            let series =
+                [ for (i, j) in selected do
+                    for (label, data) in files2p ->
+                        let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+                        (sprintf "%s S%d%d" label i j).Trim(), freqGHz, rawGroupDelay i j data ]
+
+            let chart =
+                files2p
+                |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace label i j data))
+                |> Chart.combine
+                |> Chart.withTitle "Group Delay (ns)"
+                |> Chart.withXAxisStyle "Frequency (GHz)"
+                |> Chart.withYAxisStyle "Group Delay (ns)"
+                |> Chart.withAnnotations (extremumAnnotations "x" "y" "ns" series)
+
+            Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Group Delay (ns)" series }
 
 /// Like groupDelayChartMulti, but each file's curve is its deviation (ns)
 /// from the pointwise mean across all loaded files, instead of the absolute
 /// delay — useful for spotting how much units differ from one another.
 /// Files on different frequency grids are linearly interpolated onto the
-/// first file's grid before averaging. Returns None if `selected` is empty
-/// or fewer than two files are 2-port (a single file's deviation from
-/// itself is always zero).
+/// first file's grid before averaging. Annotated with the global min/max
+/// deviation. Returns None if `selected` is empty or fewer than two files
+/// are 2-port (a single file's deviation from itself is always zero).
 let groupDelayDeviationChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
     if selected.IsEmpty then
         None
@@ -424,13 +543,19 @@ let groupDelayDeviationChartMulti (selected: (int * int) list) (files: (string *
         if files2p.Length < 2 then
             None
         else
-            selected
-            |> List.collect (fun (i, j) -> groupDelayDeviationTraces i j files2p)
-            |> Chart.combine
-            |> Chart.withTitle "Group Delay Deviation from Mean (ns)"
-            |> Chart.withXAxisStyle "Frequency (GHz)"
-            |> Chart.withYAxisStyle "Δ Group Delay (ns)"
-            |> Some
+            let results = selected |> List.map (fun (i, j) -> groupDelayDeviationSeriesAndTraces i j files2p)
+            let traces = results |> List.collect fst
+            let series = results |> List.collect snd
+
+            let chart =
+                traces
+                |> Chart.combine
+                |> Chart.withTitle "Group Delay Deviation from Mean (ns)"
+                |> Chart.withXAxisStyle "Frequency (GHz)"
+                |> Chart.withYAxisStyle "Δ Group Delay (ns)"
+                |> Chart.withAnnotations (extremumAnnotations "x" "y" "ns" series)
+
+            Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Δ Group Delay (ns)" series }
 
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.
 let show (data: TouchstoneFile) =
