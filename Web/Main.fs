@@ -14,21 +14,34 @@ type LoadedFile =
     { FileName: string
       Data: Result<TouchstoneFile, string> }
 
+/// Which collapsible section a ToggleParam message applies to.
+type ChartKind =
+    | MagnitudeChart
+    | PhaseChart
+    | SmithChart
+    | GroupDelayChart
+
 type Model =
     { Files: LoadedFile list
-      SelectedParams: Set<int * int>
+      MagnitudeSelected: Set<int * int>
+      PhaseSelected: Set<int * int>
+      SmithSelected: Set<int * int>
+      GroupDelaySelected: Set<int * int>
       Status: string option }
 
 let initModel =
     { Files = []
-      SelectedParams = Set.ofList magnitudeQuadOrder
+      MagnitudeSelected = Set.ofList magnitudeQuadOrder
+      PhaseSelected = Set.ofList magnitudeQuadOrder
+      SmithSelected = Set.ofList smithOrder
+      GroupDelaySelected = Set.ofList groupDelayOrder
       Status = None }
 
 type Message =
     | FileDropped of fileName: string * content: string
     | RemoveFile of fileName: string
     | ClearFiles
-    | ToggleParam of i: int * j: int
+    | ToggleParam of chart: ChartKind * i: int * j: int
     | SetStatus of string option
 
 let update message model =
@@ -52,16 +65,18 @@ let update message model =
     | RemoveFile fileName ->
         { model with Files = model.Files |> List.filter (fun f -> f.FileName <> fileName) }
     | ClearFiles -> initModel
-    | ToggleParam(i, j) ->
-        let key = (i, j)
-
-        let selected =
-            if model.SelectedParams.Contains key then
-                Set.remove key model.SelectedParams
+    | ToggleParam(chart, i, j) ->
+        let toggle (selected: Set<int * int>) =
+            if selected.Contains(i, j) then
+                Set.remove (i, j) selected
             else
-                Set.add key model.SelectedParams
+                Set.add (i, j) selected
 
-        { model with SelectedParams = selected }
+        match chart with
+        | MagnitudeChart -> { model with MagnitudeSelected = toggle model.MagnitudeSelected }
+        | PhaseChart -> { model with PhaseSelected = toggle model.PhaseSelected }
+        | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
+        | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart label.
@@ -103,20 +118,28 @@ let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
         text
     }
 
-let private paramToggle (dispatch: Dispatch<Message>) (selected: Set<int * int>) (i, j) =
+let private paramToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (selected: Set<int * int>) (i, j) =
     let isOn = selected.Contains(i, j)
 
     button {
         attr.``class`` (if isOn then "button is-small is-info mr-2" else "button is-small mr-2")
-        on.click (fun _ -> dispatch (ToggleParam(i, j)))
+        on.click (fun _ -> dispatch (ToggleParam(chart, i, j)))
         sprintf "S%d%d" i j
     }
 
-/// A collapsible <details> section housing one chart's container div.
-/// `open`'s toggle event doesn't rebuild the Plotly chart, so interop.js
-/// resizes it on expand — otherwise a chart drawn while hidden renders at 0
-/// size and never fixes itself.
-let private chartSection (title: string) (isOpenByDefault: bool) (divId: string) =
+/// A collapsible <details> section with its own parameter toggle row and
+/// chart container. `open`'s toggle event doesn't rebuild the Plotly chart,
+/// so interop.js resizes it on expand — otherwise a chart drawn while
+/// hidden renders at 0 size and never fixes itself.
+let private chartSection
+    (dispatch: Dispatch<Message>)
+    (title: string)
+    (isOpenByDefault: bool)
+    (chart: ChartKind)
+    (order: (int * int) list)
+    (selected: Set<int * int>)
+    (divId: string)
+    =
     details {
         attr.``class`` "chart-section box mt-4"
 
@@ -128,7 +151,20 @@ let private chartSection (title: string) (isOpenByDefault: bool) (divId: string)
             title
         }
 
-        div { attr.id divId }
+        div {
+            attr.``class`` "field is-grouped mb-3"
+
+            for pij in order do
+                paramToggle dispatch chart selected pij
+        }
+
+        if selected.IsEmpty then
+            p {
+                attr.``class`` "has-text-grey"
+                "Select at least one parameter above."
+            }
+        else
+            div { attr.id divId }
     }
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
@@ -210,30 +246,44 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                     concat {
                         if has2Port then
                             concat {
-                                div {
-                                    attr.``class`` "field is-grouped mt-4"
+                                chartSection
+                                    dispatch
+                                    "Magnitude (dB)"
+                                    true
+                                    MagnitudeChart
+                                    magnitudeQuadOrder
+                                    model.MagnitudeSelected
+                                    "chart-magnitude"
 
-                                    for pij in magnitudeQuadOrder do
-                                        paramToggle dispatch model.SelectedParams pij
-                                }
-
-                                if model.SelectedParams.IsEmpty then
-                                    p {
-                                        attr.``class`` "has-text-grey"
-                                        "Select at least one S-parameter above to show the magnitude and phase plots."
-                                    }
-                                else
-                                    concat {
-                                        chartSection "Magnitude (dB)" true "chart-magnitude"
-                                        chartSection "Phase (deg)" false "chart-phase"
-                                    }
+                                chartSection
+                                    dispatch
+                                    "Phase (deg)"
+                                    false
+                                    PhaseChart
+                                    magnitudeQuadOrder
+                                    model.PhaseSelected
+                                    "chart-phase"
                             }
 
                         if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
-                            chartSection "Smith Chart" false "chart-smith"
+                            chartSection
+                                dispatch
+                                "Smith Chart"
+                                false
+                                SmithChart
+                                smithOrder
+                                model.SmithSelected
+                                "chart-smith"
 
                         if has2Port then
-                            chartSection "Group Delay (ns)" false "chart-group-delay"
+                            chartSection
+                                dispatch
+                                "Group Delay (ns)"
+                                false
+                                GroupDelayChart
+                                groupDelayOrder
+                                model.GroupDelaySelected
+                                "chart-group-delay"
                     }
             }
     }
@@ -242,8 +292,10 @@ type App() =
     inherit ProgramComponent<Model, Message>()
 
     let mutable currentModel = initModel
-    let mutable lastFilesKey: string option = None
-    let mutable lastQuadKey: string option = None
+    let mutable lastMagnitudeKey: string option = None
+    let mutable lastPhaseKey: string option = None
+    let mutable lastSmithKey: string option = None
+    let mutable lastGroupDelayKey: string option = None
     // Guards against the render triggered by our own SetStatus dispatch
     // re-entering this method (Blazor calls OnAfterRenderAsync after every
     // render) and racing to redo or prematurely clear the same work.
@@ -280,7 +332,9 @@ type App() =
             // appeared since the last render; no-ops on ones already bound.
             do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupCollapsibleCharts").AsTask()
 
-            /// Snapshot of what would need (re)rendering right now.
+            /// Snapshot of the four sections' state right now: which files are
+            /// loaded plus each section's own selection, combined into one key
+            /// per section so each can redraw independently of the others.
             let pendingWork () =
                 let ok = okFiles currentModel
 
@@ -288,24 +342,42 @@ type App() =
                     None
                 else
                     let filesKey = ok |> List.map fst |> String.concat "|"
-                    let selected = magnitudeQuadOrder |> List.filter currentModel.SelectedParams.Contains
 
-                    let quadKey =
-                        filesKey
-                        + "##"
-                        + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
+                    let keyOf (selected: (int * int) list) =
+                        filesKey + "##" + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
 
-                    Some(ok, selected, filesKey, quadKey)
+                    let magSelected = magnitudeQuadOrder |> List.filter currentModel.MagnitudeSelected.Contains
+                    let phaseSelected = magnitudeQuadOrder |> List.filter currentModel.PhaseSelected.Contains
+                    let smithSelected = smithOrder |> List.filter currentModel.SmithSelected.Contains
+                    let gdSelected = groupDelayOrder |> List.filter currentModel.GroupDelaySelected.Contains
+
+                    Some
+                        {| Ok = ok
+                           MagSelected = magSelected
+                           PhaseSelected = phaseSelected
+                           SmithSelected = smithSelected
+                           GdSelected = gdSelected
+                           MagKey = keyOf magSelected
+                           PhaseKey = keyOf phaseSelected
+                           SmithKey = keyOf smithSelected
+                           GdKey = keyOf gdSelected |}
 
             if not isRendering then
                 match pendingWork () with
                 | None ->
-                    lastFilesKey <- None
-                    lastQuadKey <- None
+                    lastMagnitudeKey <- None
+                    lastPhaseKey <- None
+                    lastSmithKey <- None
+                    lastGroupDelayKey <- None
 
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
-                | Some(_, _, filesKey, quadKey) when lastFilesKey = Some filesKey && lastQuadKey = Some quadKey ->
+                | Some w when
+                    lastMagnitudeKey = Some w.MagKey
+                    && lastPhaseKey = Some w.PhaseKey
+                    && lastSmithKey = Some w.SmithKey
+                    && lastGroupDelayKey = Some w.GdKey
+                    ->
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
                 | Some _ ->
@@ -321,36 +393,41 @@ type App() =
 
                     match pendingWork () with
                     | None -> ()
-                    | Some(ok, selected, filesKey, quadKey) ->
-                        // Magnitude+phase redraw on file OR parameter-selection
-                        // changes; Smith and group delay only care about the
-                        // files, so toggling a parameter checkbox doesn't force
-                        // two unrelated redraws along with it.
-                        let needsQuad = lastQuadKey <> Some quadKey
-                        let needsFiles = lastFilesKey <> Some filesKey
-                        lastQuadKey <- Some quadKey
-                        lastFilesKey <- Some filesKey
+                    | Some w ->
+                        // Each section redraws only when its own files+selection
+                        // key changed, so toggling one section's buttons doesn't
+                        // force the other three to redraw along with it.
+                        let needsMagnitude = lastMagnitudeKey <> Some w.MagKey
+                        let needsPhase = lastPhaseKey <> Some w.PhaseKey
+                        let needsSmith = lastSmithKey <> Some w.SmithKey
+                        let needsGroupDelay = lastGroupDelayKey <> Some w.GdKey
+                        lastMagnitudeKey <- Some w.MagKey
+                        lastPhaseKey <- Some w.PhaseKey
+                        lastSmithKey <- Some w.SmithKey
+                        lastGroupDelayKey <- Some w.GdKey
 
                         let render (divId: string) (chart: GenericChart.GenericChart) : Task =
                             this.JSRuntime
                                 .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson chart)
                                 .AsTask()
 
-                        if needsQuad then
-                            match magnitudeQuadMulti selected ok with
+                        if needsMagnitude then
+                            match magnitudeQuadMulti w.MagSelected w.Ok with
                             | Some chart -> do! render "chart-magnitude" chart
                             | None -> ()
 
-                            match phaseQuadMulti selected ok with
+                        if needsPhase then
+                            match phaseQuadMulti w.PhaseSelected w.Ok with
                             | Some chart -> do! render "chart-phase" chart
                             | None -> ()
 
-                        if needsFiles then
-                            match smithChartMulti ok with
+                        if needsSmith then
+                            match smithChartMulti w.SmithSelected w.Ok with
                             | Some chart -> do! render "chart-smith" chart
                             | None -> ()
 
-                            match groupDelayChartMulti ok with
+                        if needsGroupDelay then
+                            match groupDelayChartMulti w.GdSelected w.Ok with
                             | Some chart -> do! render "chart-group-delay" chart
                             | None -> ()
 

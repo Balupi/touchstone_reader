@@ -225,8 +225,13 @@ let private smithGrid () =
           yield smithGridLine (reactanceArc x)
           yield smithGridLine (reactanceArc -x) ]
 
-let private smithTraces (label: string) (data: TouchstoneFile) =
-    [ for i in 1 .. data.Ports ->
+/// Reflection parameters selectable on the Smith chart: S11, S22.
+let smithOrder = [ (1, 1); (2, 2) ]
+
+let private smithTraces (label: string) (selected: (int * int) list) (data: TouchstoneFile) =
+    selected
+    |> List.filter (fun (i, j) -> i = j && i <= data.Ports)
+    |> List.map (fun (i, _) ->
         let points =
             data.Matrices
             |> Array.map (fun m -> let g = m.[i, i] in (g.Real, g.Imaginary))
@@ -234,7 +239,7 @@ let private smithTraces (label: string) (data: TouchstoneFile) =
 
         let name = sprintf "S%d%d" i i
         let name = if label = "" then name else sprintf "%s %s" label name
-        Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name) ]
+        Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name))
 
 let private smithLayout (chart: GenericChart.GenericChart) =
     let axisRange = StyleParam.Range.MinMax(-1.15, 1.15)
@@ -260,23 +265,27 @@ let smithChart (data: TouchstoneFile) =
     if data.Option.Parameter <> S then
         failwith "Smith chart requires S-parameter data."
 
-    Chart.combine (smithGrid () @ smithTraces "" data) |> smithLayout
+    Chart.combine (smithGrid () @ smithTraces "" [ for i in 1 .. data.Ports -> (i, i) ] data) |> smithLayout
 
-/// Smith chart overlaying the input reflection coefficients of several labeled
-/// S-parameter files (e.g. filenames); non-S-parameter files are ignored.
-/// Returns None if none of the files are S-parameter data.
-let smithChartMulti (files: (string * TouchstoneFile) list) =
-    let sFiles = files |> List.filter (fun (_, data) -> data.Option.Parameter = S)
-
-    if sFiles.IsEmpty then
+/// Smith chart overlaying the selected reflection coefficients (e.g.
+/// `[ (1,1); (2,2) ]` for S11+S22) of several labeled S-parameter files
+/// (e.g. filenames); non-S-parameter files are ignored. Returns None if
+/// `selected` is empty or none of the files are S-parameter data.
+let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+    if selected.IsEmpty then
         None
     else
-        sFiles
-        |> List.collect (fun (label, data) -> smithTraces label data)
-        |> (@) (smithGrid ())
-        |> Chart.combine
-        |> smithLayout
-        |> Some
+        let sFiles = files |> List.filter (fun (_, data) -> data.Option.Parameter = S)
+
+        if sFiles.IsEmpty then
+            None
+        else
+            sFiles
+            |> List.collect (fun (label, data) -> smithTraces label selected data)
+            |> (@) (smithGrid ())
+            |> Chart.combine
+            |> smithLayout
+            |> Some
 
 /// Unwraps a sequence of angles (radians) so consecutive jumps greater than
 /// π get folded by ±2π, producing a continuous curve. Raw S-parameter phase
@@ -320,22 +329,29 @@ let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneF
     let name = if label = "" then name else sprintf "%s %s" label name
     Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
 
-/// Group delay (ns) of the two transmission parameters (S21 and S12, or the
-/// Y/Z/... equivalents) vs frequency (GHz), overlaid across labeled 2-port
-/// files. Returns None if none of the files are 2-port.
-let groupDelayChartMulti (files: (string * TouchstoneFile) list) =
-    let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
+/// Transmission parameters selectable for group delay: S21, S12.
+let groupDelayOrder = [ (2, 1); (1, 2) ]
 
-    if files2p.IsEmpty then
+/// Group delay (ns) of the selected transmission parameters (e.g.
+/// `[ (2,1); (1,2) ]` for S21+S12, or the Y/Z/... equivalents) vs frequency
+/// (GHz), overlaid across labeled 2-port files. Returns None if `selected`
+/// is empty or none of the files are 2-port.
+let groupDelayChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+    if selected.IsEmpty then
         None
     else
-        files2p
-        |> List.collect (fun (label, data) -> [ groupDelayTrace label 2 1 data; groupDelayTrace label 1 2 data ])
-        |> Chart.combine
-        |> Chart.withTitle "Group Delay (ns)"
-        |> Chart.withXAxisStyle "Frequency (GHz)"
-        |> Chart.withYAxisStyle "Group Delay (ns)"
-        |> Some
+        let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
+
+        if files2p.IsEmpty then
+            None
+        else
+            files2p
+            |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace label i j data))
+            |> Chart.combine
+            |> Chart.withTitle "Group Delay (ns)"
+            |> Chart.withXAxisStyle "Frequency (GHz)"
+            |> Chart.withYAxisStyle "Group Delay (ns)"
+            |> Some
 
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.
 let show (data: TouchstoneFile) =
