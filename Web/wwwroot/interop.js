@@ -58,11 +58,12 @@ window.touchstoneInterop = {
     // redraw already-rendered charts without needing new data from .NET.
     _lastFigures: {},
 
-    // JPEG has no alpha channel, so a transparent/dark-mode paper_bgcolor
-    // would export as a black background instead of disappearing. Swap in
-    // white just for the download, then swap back — replaces the default
-    // camera button since its own download path always uses the on-screen
-    // (possibly transparent) colors.
+    // JPEG has no alpha channel, so a transparent/dark-mode background would
+    // export as black, and the dark-mode axis/font colors (light gray, for
+    // contrast on a dark page) would be nearly invisible on it too. Swap the
+    // whole chart to its untethemed (light) figure just for the download,
+    // then swap back — replaces the default camera button since its own
+    // download path always captures the current on-screen colors as-is.
     _config: function (divId) {
         return {
             responsive: true,
@@ -73,11 +74,18 @@ window.touchstoneInterop = {
                     title: 'Download plot as jpeg',
                     icon: Plotly.Icons.camera,
                     click: function (gd) {
-                        const prevPaper = gd.layout.paper_bgcolor;
-                        const prevPlot = gd.layout.plot_bgcolor;
-                        Plotly.relayout(gd, { paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff' })
+                        const fig = window.touchstoneInterop._lastFigures[divId];
+                        const lightLayout = Object.assign({}, fig.layout, { colorway: window.touchstoneInterop._colorway });
+                        Plotly.react(divId, fig.data, lightLayout, window.touchstoneInterop._config(divId))
                             .then(() => Plotly.downloadImage(gd, { format: 'jpeg', filename: divId }))
-                            .then(() => Plotly.relayout(gd, { paper_bgcolor: prevPaper, plot_bgcolor: prevPlot }));
+                            .then(() =>
+                                Plotly.react(
+                                    divId,
+                                    fig.data,
+                                    window.touchstoneInterop._themeLayout(fig.layout),
+                                    window.touchstoneInterop._config(divId)
+                                )
+                            );
                     },
                 },
             ],
