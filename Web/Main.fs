@@ -73,6 +73,7 @@ type App() =
                     let phaseSelected = magnitudeQuadOrder |> List.filter currentModel.PhaseSelected.Contains
                     let smithSelected = smithOrder |> List.filter currentModel.SmithSelected.Contains
                     let gdSelected = groupDelayOrder |> List.filter currentModel.GroupDelaySelected.Contains
+                    let gdMode = currentModel.GroupDelayMode
 
                     Some
                         {| Ok = ok
@@ -80,10 +81,11 @@ type App() =
                            PhaseSelected = phaseSelected
                            SmithSelected = smithSelected
                            GdSelected = gdSelected
+                           GdMode = gdMode
                            MagKey = keyOf magSelected
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
-                           GdKey = keyOf gdSelected |}
+                           GdKey = keyOf gdSelected + "##" + string gdMode |}
 
             if not isRendering then
                 match pendingWork () with
@@ -150,7 +152,12 @@ type App() =
                             | None -> ()
 
                         if needsGroupDelay then
-                            match groupDelayChartMulti w.GdSelected w.Ok with
+                            let chart =
+                                match w.GdMode with
+                                | Absolute -> groupDelayChartMulti w.GdSelected w.Ok
+                                | DeviationFromMean -> groupDelayDeviationChartMulti w.GdSelected w.Ok
+
+                            match chart with
                             | Some chart -> do! render "chart-group-delay" chart
                             | None -> ()
 

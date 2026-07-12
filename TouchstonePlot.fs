@@ -307,10 +307,10 @@ let private unwrap (radians: float[]) =
 
     result
 
-/// Group delay in ns: -1/(2π) · dφ/df, with φ unwrapped (radians) and f in
-/// Hz. Central difference in the interior, one-sided at the endpoints.
-let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneFile) =
-    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+/// Group delay in ns at every frequency point (Hz): -1/(2π) · dφ/df, with φ
+/// unwrapped (radians). Central difference in the interior, one-sided at
+/// the endpoints. Not downsampled — callers combine/derive from this first.
+let private rawGroupDelay (i: int) (j: int) (data: TouchstoneFile) =
     let phases = data.Matrices |> Array.map (fun m -> m.[i, j].Phase) |> unwrap
     let n = phases.Length
 
@@ -324,10 +324,65 @@ let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneF
                 let dF = data.Frequencies.[hi] - data.Frequencies.[lo]
                 if dF = 0.0 then 0.0 else -1e9 * dPhi / (2.0 * Math.PI * dF))
 
+    delayNs
+
+let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneFile) =
+    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+    let delayNs = rawGroupDelay i j data
     let points = Array.zip freqGHz delayNs |> lttb maxPointsPerTrace
     let name = sprintf "%A%d%d" data.Option.Parameter i j
     let name = if label = "" then name else sprintf "%s %s" label name
     Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
+
+/// Linear interpolation of the series (xs, ys) at x; xs must be sorted
+/// ascending. Clamps to the nearest endpoint outside the series' range.
+let private interpAt (xs: float[]) (ys: float[]) (x: float) =
+    let n = xs.Length
+
+    if n = 0 then
+        nan
+    elif n = 1 || x <= xs.[0] then
+        ys.[0]
+    elif x >= xs.[n - 1] then
+        ys.[n - 1]
+    else
+        let mutable lo = 0
+        let mutable hi = n - 1
+
+        while hi - lo > 1 do
+            let mid = (lo + hi) / 2
+            if xs.[mid] <= x then lo <- mid else hi <- mid
+
+        let x0, x1 = xs.[lo], xs.[hi]
+        let y0, y1 = ys.[lo], ys.[hi]
+        if x1 = x0 then y0 else y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+/// One trace per file of Sij's group delay deviation (ns) from the pointwise
+/// mean across all of `files`. Files on a different frequency grid than the
+/// first are linearly interpolated onto it before averaging.
+let private groupDelayDeviationTraces (i: int) (j: int) (files: (string * TouchstoneFile) list) =
+    match files with
+    | [] -> []
+    | (_, refData) :: _ ->
+        let refFreqs = refData.Frequencies
+        let n = refFreqs.Length
+
+        let interpolated =
+            files
+            |> List.map (fun (label, data) -> label, data, refFreqs |> Array.map (interpAt data.Frequencies (rawGroupDelay i j data)))
+
+        let mean =
+            Array.init n (fun k -> (interpolated |> List.sumBy (fun (_, _, ys) -> ys.[k])) / float interpolated.Length)
+
+        let freqGHz = refFreqs |> Array.map (fun f -> f / 1e9)
+
+        interpolated
+        |> List.map (fun (label, data, ys) ->
+            let deviation = Array.init n (fun k -> ys.[k] - mean.[k])
+            let points = Array.zip freqGHz deviation |> lttb maxPointsPerTrace
+            let name = sprintf "%A%d%d" data.Option.Parameter i j
+            let name = if label = "" then name else sprintf "%s %s" label name
+            Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name))
 
 /// Transmission parameters selectable for group delay: S21, S12.
 let groupDelayOrder = [ (2, 1); (1, 2) ]
@@ -351,6 +406,30 @@ let groupDelayChartMulti (selected: (int * int) list) (files: (string * Touchsto
             |> Chart.withTitle "Group Delay (ns)"
             |> Chart.withXAxisStyle "Frequency (GHz)"
             |> Chart.withYAxisStyle "Group Delay (ns)"
+            |> Some
+
+/// Like groupDelayChartMulti, but each file's curve is its deviation (ns)
+/// from the pointwise mean across all loaded files, instead of the absolute
+/// delay — useful for spotting how much units differ from one another.
+/// Files on different frequency grids are linearly interpolated onto the
+/// first file's grid before averaging. Returns None if `selected` is empty
+/// or fewer than two files are 2-port (a single file's deviation from
+/// itself is always zero).
+let groupDelayDeviationChartMulti (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+    if selected.IsEmpty then
+        None
+    else
+        let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
+
+        if files2p.Length < 2 then
+            None
+        else
+            selected
+            |> List.collect (fun (i, j) -> groupDelayDeviationTraces i j files2p)
+            |> Chart.combine
+            |> Chart.withTitle "Group Delay Deviation from Mean (ns)"
+            |> Chart.withXAxisStyle "Frequency (GHz)"
+            |> Chart.withYAxisStyle "Δ Group Delay (ns)"
             |> Some
 
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.

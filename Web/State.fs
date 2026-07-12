@@ -15,12 +15,19 @@ type ChartKind =
     | SmithChart
     | GroupDelayChart
 
+/// Show each file's absolute curve, or (only meaningful with 2+ files) its
+/// deviation from the pointwise mean across the loaded files.
+type DisplayMode =
+    | Absolute
+    | DeviationFromMean
+
 type Model =
     { Files: LoadedFile list
       MagnitudeSelected: Set<int * int>
       PhaseSelected: Set<int * int>
       SmithSelected: Set<int * int>
       GroupDelaySelected: Set<int * int>
+      GroupDelayMode: DisplayMode
       Status: string option }
 
 let initModel =
@@ -29,6 +36,7 @@ let initModel =
       PhaseSelected = Set.ofList magnitudeQuadOrder
       SmithSelected = Set.ofList smithOrder
       GroupDelaySelected = Set.ofList groupDelayOrder
+      GroupDelayMode = Absolute
       Status = None }
 
 type Message =
@@ -36,6 +44,7 @@ type Message =
     | RemoveFile of fileName: string
     | ClearFiles
     | ToggleParam of chart: ChartKind * i: int * j: int
+    | SetGroupDelayMode of DisplayMode
     | SetStatus of string option
 
 let update message model =
@@ -71,6 +80,7 @@ let update message model =
         | PhaseChart -> { model with PhaseSelected = toggle model.PhaseSelected }
         | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
         | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
+    | SetGroupDelayMode mode -> { model with GroupDelayMode = mode }
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart label.

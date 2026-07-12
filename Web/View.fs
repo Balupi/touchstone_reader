@@ -1,6 +1,7 @@
 /// Bolero view for the Touchstone web app.
 module TouchstoneReader.Web.View
 
+open Bolero
 open Bolero.Html
 open Elmish
 open TouchstoneReader.Touchstone
@@ -50,7 +51,9 @@ let private paramToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (select
 /// A collapsible <details> section with its own parameter toggle row and
 /// chart container. `open`'s toggle event doesn't rebuild the Plotly chart,
 /// so interop.js resizes it on expand — otherwise a chart drawn while
-/// hidden renders at 0 size and never fixes itself.
+/// hidden renders at 0 size and never fixes itself. `extraControls` renders
+/// between the toggle row and the chart (e.g. Group Delay's absolute/
+/// deviation switch); pass `empty ()` for none.
 let private chartSection
     (dispatch: Dispatch<Message>)
     (title: string)
@@ -58,6 +61,7 @@ let private chartSection
     (chart: ChartKind)
     (order: (int * int) list)
     (selected: Set<int * int>)
+    (extraControls: Node)
     (divId: string)
     =
     details {
@@ -78,6 +82,8 @@ let private chartSection
                 paramToggle dispatch chart selected pij
         }
 
+        extraControls
+
         if selected.IsEmpty then
             p {
                 attr.``class`` "has-text-grey"
@@ -86,6 +92,33 @@ let private chartSection
         else
             div { attr.id divId }
     }
+
+/// Absolute-vs-deviation-from-mean switch for the Group Delay section; only
+/// meaningful (and shown) once 2+ files are actually comparable.
+let private groupDelayModeToggle (dispatch: Dispatch<Message>) (mode: DisplayMode) (comparableFileCount: int) =
+    if comparableFileCount < 2 then
+        empty ()
+    else
+        div {
+            attr.``class`` "field is-grouped mb-3"
+
+            button {
+                attr.``class`` (if mode = Absolute then "button is-small is-info mr-2" else "button is-small mr-2")
+                on.click (fun _ -> dispatch (SetGroupDelayMode Absolute))
+                "Absolute"
+            }
+
+            button {
+                attr.``class``
+                    (if mode = DeviationFromMean then
+                         "button is-small is-info mr-2"
+                     else
+                         "button is-small mr-2")
+
+                on.click (fun _ -> dispatch (SetGroupDelayMode DeviationFromMean))
+                "Δ from mean"
+            }
+        }
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
@@ -184,6 +217,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     MagnitudeChart
                                     magnitudeQuadOrder
                                     model.MagnitudeSelected
+                                    (empty ())
                                     "chart-magnitude"
 
                                 chartSection
@@ -193,6 +227,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     PhaseChart
                                     magnitudeQuadOrder
                                     model.PhaseSelected
+                                    (empty ())
                                     "chart-phase"
                             }
 
@@ -204,9 +239,12 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 SmithChart
                                 smithOrder
                                 model.SmithSelected
+                                (empty ())
                                 "chart-smith"
 
                         if has2Port then
+                            let comparableCount = ok |> List.filter (fun (_, data) -> data.Ports = 2) |> List.length
+
                             chartSection
                                 dispatch
                                 "Group Delay (ns)"
@@ -214,6 +252,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 GroupDelayChart
                                 groupDelayOrder
                                 model.GroupDelaySelected
+                                (groupDelayModeToggle dispatch model.GroupDelayMode comparableCount)
                                 "chart-group-delay"
                     }
             }
