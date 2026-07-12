@@ -28,7 +28,8 @@ type Model =
       SmithSelected: Set<int * int>
       GroupDelaySelected: Set<int * int>
       GroupDelayMode: DisplayMode
-      ShowExtrema: bool
+      ShowMagnitudeExtrema: bool
+      ShowGroupDelayExtrema: bool
       Status: string option }
 
 let initModel =
@@ -38,7 +39,8 @@ let initModel =
       SmithSelected = Set.ofList smithOrder
       GroupDelaySelected = Set.ofList groupDelayOrder
       GroupDelayMode = Absolute
-      ShowExtrema = true
+      ShowMagnitudeExtrema = true
+      ShowGroupDelayExtrema = true
       Status = None }
 
 type Message =
@@ -47,7 +49,9 @@ type Message =
     | ClearFiles
     | ToggleParam of chart: ChartKind * i: int * j: int
     | SetGroupDelayMode of DisplayMode
-    | SetShowExtrema of bool
+    /// Only meaningful for MagnitudeChart/GroupDelayChart — the other two
+    /// chart kinds never show min/max markers (see TouchstonePlot.fs).
+    | SetShowExtrema of chart: ChartKind * show: bool
     | SetStatus of string option
 
 let update message model =
@@ -84,7 +88,9 @@ let update message model =
         | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
         | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
     | SetGroupDelayMode mode -> { model with GroupDelayMode = mode }
-    | SetShowExtrema show -> { model with ShowExtrema = show }
+    | SetShowExtrema(MagnitudeChart, show) -> { model with ShowMagnitudeExtrema = show }
+    | SetShowExtrema(GroupDelayChart, show) -> { model with ShowGroupDelayExtrema = show }
+    | SetShowExtrema(_, _) -> model
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart label.

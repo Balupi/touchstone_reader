@@ -171,9 +171,11 @@ let private groupDelayModeToggle (dispatch: Dispatch<Message>) (mode: DisplayMod
             }
         }
 
-/// On/off switch for the Magnitude and Group Delay charts' min/max
-/// annotations — shared by both since it's one setting, not a per-chart one.
-let private extremaToggle (dispatch: Dispatch<Message>) (show: bool) =
+/// On/off switch for a chart section's min/max reference lines. Each of
+/// Magnitude and Group Delay gets its own instance with independent state,
+/// embedded in that section (via `chartSection`'s `extraControls`) rather
+/// than a single shared control elsewhere on the page.
+let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show: bool) =
     div {
         attr.``class`` "field is-grouped is-align-items-center mb-3"
 
@@ -187,13 +189,13 @@ let private extremaToggle (dispatch: Dispatch<Message>) (show: bool) =
 
             button {
                 attr.``class`` (if show then "button is-small is-info is-selected" else "button is-small")
-                on.click (fun _ -> dispatch (SetShowExtrema true))
+                on.click (fun _ -> dispatch (SetShowExtrema(chart, true)))
                 "An"
             }
 
             button {
                 attr.``class`` (if not show then "button is-small is-info is-selected" else "button is-small")
-                on.click (fun _ -> dispatch (SetShowExtrema false))
+                on.click (fun _ -> dispatch (SetShowExtrema(chart, false)))
                 "Aus"
             }
         }
@@ -314,8 +316,6 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                     concat {
                         if has2Port then
                             concat {
-                                extremaToggle dispatch model.ShowExtrema
-
                                 chartSection
                                     dispatch
                                     "Magnitude (dB)"
@@ -323,7 +323,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     MagnitudeChart
                                     magnitudeQuadOrder
                                     model.MagnitudeSelected
-                                    (empty ())
+                                    (extremaToggle dispatch MagnitudeChart model.ShowMagnitudeExtrema)
                                     ""
                                     "chart-magnitude"
 
@@ -361,7 +361,10 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 GroupDelayChart
                                 groupDelayOrder
                                 model.GroupDelaySelected
-                                (groupDelayModeToggle dispatch model.GroupDelayMode comparableCount)
+                                (concat {
+                                    groupDelayModeToggle dispatch model.GroupDelayMode comparableCount
+                                    extremaToggle dispatch GroupDelayChart model.ShowGroupDelayExtrema
+                                })
                                 ""
                                 "chart-group-delay"
                     }

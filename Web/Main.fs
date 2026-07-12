@@ -74,7 +74,8 @@ type App() =
                     let smithSelected = smithOrder |> List.filter currentModel.SmithSelected.Contains
                     let gdSelected = groupDelayOrder |> List.filter currentModel.GroupDelaySelected.Contains
                     let gdMode = currentModel.GroupDelayMode
-                    let showExtrema = currentModel.ShowExtrema
+                    let showMagExtrema = currentModel.ShowMagnitudeExtrema
+                    let showGdExtrema = currentModel.ShowGroupDelayExtrema
 
                     Some
                         {| Ok = ok
@@ -83,11 +84,12 @@ type App() =
                            SmithSelected = smithSelected
                            GdSelected = gdSelected
                            GdMode = gdMode
-                           ShowExtrema = showExtrema
-                           MagKey = keyOf magSelected + "##" + string showExtrema
+                           ShowMagExtrema = showMagExtrema
+                           ShowGdExtrema = showGdExtrema
+                           MagKey = keyOf magSelected + "##" + string showMagExtrema
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
-                           GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showExtrema |}
+                           GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema |}
 
             if not isRendering then
                 match pendingWork () with
@@ -144,7 +146,7 @@ type App() =
                                 .AsTask()
 
                         if needsMagnitude then
-                            match magnitudeQuadMulti w.ShowExtrema w.MagSelected w.Ok with
+                            match magnitudeQuadMulti w.ShowMagExtrema w.MagSelected w.Ok with
                             | Some result -> do! render "chart-magnitude" result
                             | None -> ()
 
@@ -161,8 +163,8 @@ type App() =
                         if needsGroupDelay then
                             let result =
                                 match w.GdMode with
-                                | Absolute -> groupDelayChartMulti w.ShowExtrema w.GdSelected w.Ok
-                                | DeviationFromMean -> groupDelayDeviationChartMulti w.ShowExtrema w.GdSelected w.Ok
+                                | Absolute -> groupDelayChartMulti w.ShowGdExtrema w.GdSelected w.Ok
+                                | DeviationFromMean -> groupDelayDeviationChartMulti w.ShowGdExtrema w.GdSelected w.Ok
 
                             match result with
                             | Some result -> do! render "chart-group-delay" result

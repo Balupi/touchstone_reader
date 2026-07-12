@@ -93,40 +93,55 @@ let private toCsv (xLabel: string) (yLabel: string) (series: (string * float[] *
 
     header + "\n" + ([ for r in 0 .. maxLen - 1 -> row r ] |> String.concat "\n")
 
-/// Annotates the global minimum and maximum across several (label, xs, ys)
-/// series in one subplot with the file+value they came from, instead of one
-/// marker pair per file (which gets noisy fast with several files loaded).
-let private extremumAnnotations (xref: string) (yref: string) (unit: string) (series: (string * float[] * float[]) list) =
+/// Fixed colors for the global min/max reference lines — deliberately
+/// outside `_colorway` (interop.js) so they never coincide with a data
+/// trace's own color and always read as reference lines, not data.
+let private minColor = "#e0a12e"
+let private maxColor = "#e63946"
+
+/// The global minimum and maximum across several (xs, ys) series in one
+/// subplot/chart, as a horizontal dashed line spanning the data's x-range
+/// plus a value label sitting at the y-axis — instead of one marker per
+/// file, which got noisy fast with several files loaded and didn't scale to
+/// "what's the worst case across everything I've loaded".
+let private extremumMarkers (xref: string) (yref: string) (unit: string) (series: (string * float[] * float[]) list) =
     let flat =
-        [ for (label, xs, ys) in series do
-            for k in 0 .. ys.Length - 1 -> label, xs.[k], ys.[k] ]
+        [ for (_, xs, ys) in series do
+            for k in 0 .. ys.Length - 1 -> xs.[k], ys.[k] ]
 
     match flat with
-    | [] -> []
+    | [] -> [], []
     | _ ->
-        let annotate kind (label: string, x, y) =
-            let text =
-                if label = "" then
-                    sprintf "%s: %.3g%s" kind y unit
-                else
-                    sprintf "%s %s: %.3g%s" label kind y unit
+        let allX = flat |> List.map fst
+        let xMin, xMax = List.min allX, List.max allX
+        let allY = flat |> List.map snd
+        let yMin, yMax = List.min allY, List.max allY
 
-            // No explicit font color or background: both inherit from
-            // layout.font, which interop.js already patches per light/dark
-            // theme — a fixed color here would go illegible under the other theme.
+        let line (color: string) (y: float) =
+            Shape.init (
+                ShapeType = StyleParam.ShapeType.Line,
+                X0 = xMin,
+                X1 = xMax,
+                Y0 = y,
+                Y1 = y,
+                Xref = xref,
+                Yref = yref,
+                Line = Line.init (Color = Color.fromString color, Dash = StyleParam.DrawingStyle.Dash, Width = 1.0)
+            )
+
+        let label (color: string) (kind: string) (y: float) =
             Annotation.init (
-                X = x,
+                X = xMin,
                 Y = y,
                 XRef = xref,
                 YRef = yref,
-                Text = text,
-                ShowArrow = true,
-                ArrowSize = 0.6,
-                Font = Font.init (Size = 10.0)
+                XAnchor = StyleParam.XAnchorPosition.Right,
+                Text = sprintf "%s: %.3g%s" kind y unit,
+                ShowArrow = false,
+                Font = Font.init (Size = 10.0, Color = Color.fromString color)
             )
 
-        [ annotate "Min" (flat |> List.minBy (fun (_, _, y) -> y))
-          annotate "Max" (flat |> List.maxBy (fun (_, _, y) -> y)) ]
+        [ line minColor yMin; line maxColor yMax ], [ label minColor "Min" yMin; label maxColor "Max" yMax ]
 
 /// One line trace for Sij (or Yij/Zij/...) of one file, `toY` picking the
 /// scalar to plot from each complex value. `label` (e.g. a filename) is
@@ -233,30 +248,32 @@ let private quadMulti
                 |> Chart.combine
                 |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
 
-            let annotations =
+            let shapes, annotations =
                 if showExtrema then
                     let xref = if idx = 0 then "x" else sprintf "x%d" (idx + 1)
                     let yref = if idx = 0 then "y" else sprintf "y%d" (idx + 1)
-                    extremumAnnotations xref yref unit series
+                    extremumMarkers xref yref unit series
                 else
-                    []
+                    [], []
 
-            chart, annotations, series
+            chart, shapes, annotations, series
 
         let cols = min 2 selected.Length
         let rows = (selected.Length + cols - 1) / cols
 
         let results = selected |> List.mapi subplot
-        let annotations = results |> List.collect (fun (_, a, _) -> a)
-        let allSeries = results |> List.collect (fun (_, _, s) -> s)
+        let shapes = results |> List.collect (fun (_, s, _, _) -> s)
+        let annotations = results |> List.collect (fun (_, _, a, _) -> a)
+        let allSeries = results |> List.collect (fun (_, _, _, s) -> s)
 
         let chart =
             results
-            |> List.map (fun (c, _, _) -> c)
+            |> List.map (fun (c, _, _, _) -> c)
             |> Chart.Grid(rows, cols)
             |> Chart.withTitle title
             |> Chart.withSize (450 * cols, 350 * rows)
-            |> fun c -> if annotations.IsEmpty then c else Chart.withAnnotations annotations c
+            |> Chart.withShapes shapes
+            |> Chart.withAnnotations annotations
 
         Some { Chart = chart; Csv = toCsv "Frequency (GHz)" unit allSeries }
 
@@ -517,7 +534,7 @@ let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files
                         let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
                         (sprintf "%s S%d%d" label i j).Trim(), freqGHz, rawGroupDelay i j data ]
 
-            let annotations = if showExtrema then extremumAnnotations "x" "y" "ns" series else []
+            let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []
 
             let chart =
                 files2p
@@ -526,6 +543,7 @@ let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files
                 |> Chart.withTitle "Group Delay (ns)"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle "Group Delay (ns)"
+                |> Chart.withShapes shapes
                 |> Chart.withAnnotations annotations
 
             Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Group Delay (ns)" series }
@@ -549,7 +567,7 @@ let groupDelayDeviationChartMulti (showExtrema: bool) (selected: (int * int) lis
             let results = selected |> List.map (fun (i, j) -> groupDelayDeviationSeriesAndTraces i j files2p)
             let traces = results |> List.collect fst
             let series = results |> List.collect snd
-            let annotations = if showExtrema then extremumAnnotations "x" "y" "ns" series else []
+            let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []
 
             let chart =
                 traces
@@ -557,6 +575,7 @@ let groupDelayDeviationChartMulti (showExtrema: bool) (selected: (int * int) lis
                 |> Chart.withTitle "Group Delay Deviation from Mean (ns)"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle "Δ Group Delay (ns)"
+                |> Chart.withShapes shapes
                 |> Chart.withAnnotations annotations
 
             Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Δ Group Delay (ns)" series }
