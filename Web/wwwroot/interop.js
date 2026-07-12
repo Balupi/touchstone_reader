@@ -31,10 +31,22 @@ window.touchstoneInterop = {
     // the same UI instead of Plotly's unrelated default set.
     _colorway: ['#3298dc', '#f14668', '#48c78e', '#ffdd57', '#485fc7', '#00d1b2', '#ff6b81', '#9b59b6'],
 
+    // Plotly.NET always bakes in an explicit layout.width, which pins the
+    // chart to that pixel size regardless of the `responsive: true` config —
+    // wasted space in a wide container, overflow in a narrow one. Drop it and
+    // let Plotly measure the container's actual width instead; layout.height
+    // stays fixed (already sized per chart, e.g. taller for a 2-row grid).
+    _makeResponsive: function (layout) {
+        layout = Object.assign({}, layout, { autosize: true })
+        delete layout.width
+        return layout
+    },
+
     // Plotly always draws a white/opaque chart regardless of page theme.
     // Match the OS/browser dark-mode preference Bulma itself already follows,
     // so a chart doesn't sit as a glaring white box on a dark page.
     _themeLayout: function (layout) {
+        layout = window.touchstoneInterop._makeResponsive(layout)
         layout = Object.assign({}, layout, { colorway: window.touchstoneInterop._colorway });
         const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
         if (!isDark) return layout;
@@ -65,6 +77,7 @@ window.touchstoneInterop = {
     // data-thick so they don't become indistinguishable from the actual S11/
     // S22 curve.
     _monochromeLayout: function (layout) {
+        layout = window.touchstoneInterop._makeResponsive(layout)
         layout = Object.assign({}, layout, {
             paper_bgcolor: '#ffffff',
             plot_bgcolor: '#ffffff',

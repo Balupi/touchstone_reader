@@ -62,6 +62,7 @@ let private chartSection
     (order: (int * int) list)
     (selected: Set<int * int>)
     (extraControls: Node)
+    (divStyle: string)
     (divId: string)
     =
     details {
@@ -90,7 +91,10 @@ let private chartSection
                 "Select at least one parameter above."
             }
         else
-            div { attr.id divId }
+            div {
+                attr.id divId
+                attr.style divStyle
+            }
     }
 
 /// Absolute-vs-deviation-from-mean switch for the Group Delay section; only
@@ -218,6 +222,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     magnitudeQuadOrder
                                     model.MagnitudeSelected
                                     (empty ())
+                                    ""
                                     "chart-magnitude"
 
                                 chartSection
@@ -228,6 +233,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     magnitudeQuadOrder
                                     model.PhaseSelected
                                     (empty ())
+                                    ""
                                     "chart-phase"
                             }
 
@@ -240,6 +246,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 smithOrder
                                 model.SmithSelected
                                 (empty ())
+                                "max-width: 700px; margin: 0 auto;"
                                 "chart-smith"
 
                         if has2Port then
@@ -253,6 +260,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 groupDelayOrder
                                 model.GroupDelaySelected
                                 (groupDelayModeToggle dispatch model.GroupDelayMode comparableCount)
+                                ""
                                 "chart-group-delay"
                     }
             }
