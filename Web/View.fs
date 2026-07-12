@@ -8,36 +8,56 @@ open TouchstoneReader.Touchstone
 open TouchstoneReader.TouchstonePlot
 open TouchstoneReader.Web.State
 
-let private fileSummary (data: TouchstoneFile) =
-    sprintf
-        "%d-port, %d frequency points, %A parameters (%A, R=%.0f Ω)"
-        data.Ports
-        data.Frequencies.Length
-        data.Option.Parameter
-        data.Option.Format
-        data.Option.R
+let private fileSummaryTags (data: TouchstoneFile) =
+    [ sprintf "%d-port" data.Ports
+      sprintf "%d pts" data.Frequencies.Length
+      sprintf "%A" data.Option.Parameter
+      sprintf "%A" data.Option.Format
+      sprintf "R=%.0f Ω" data.Option.R ]
 
 let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
-    let cls =
-        match f.Data with
-        | Ok _ -> "notification is-info mt-2"
-        | Error _ -> "notification is-danger mt-2"
-
-    let text =
-        match f.Data with
-        | Ok data -> sprintf "%s — %s" f.FileName (fileSummary data)
-        | Error msg -> sprintf "%s — %s" f.FileName msg
-
-    div {
-        attr.``class`` cls
-
+    let deleteButton =
         button {
             attr.``class`` "delete"
             on.click (fun _ -> dispatch (RemoveFile f.FileName))
         }
 
-        text
-    }
+    match f.Data with
+    | Ok data ->
+        div {
+            attr.``class`` "notification is-info mt-2"
+            deleteButton
+
+            p {
+                attr.``class`` "has-text-weight-semibold"
+                f.FileName
+            }
+
+            div {
+                attr.``class`` "tags mt-2 mb-0"
+
+                for t in fileSummaryTags data do
+                    span {
+                        attr.``class`` "tag"
+                        t
+                    }
+            }
+        }
+    | Error msg ->
+        article {
+            attr.``class`` "message is-danger mt-2"
+
+            div {
+                attr.``class`` "message-header"
+                p { f.FileName }
+                deleteButton
+            }
+
+            div {
+                attr.``class`` "message-body"
+                msg
+            }
+        }
 
 let private paramToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (selected: Set<int * int>) (i, j) =
     let isOn = selected.Contains(i, j)
@@ -159,35 +179,60 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
         // divs below and wipe out the content Plotly injected into them,
         // since Blazor has no idea that content is there. Visibility is
         // toggled with a style instead.
-        p {
-            attr.``class`` "has-text-warning mb-2"
+        div {
+            attr.``class`` "mb-2"
             attr.style (if model.Status.IsSome then "" else "display: none")
-            sprintf "⏳ %s" (defaultArg model.Status "")
+
+            p {
+                attr.``class`` "has-text-warning mb-1"
+                sprintf "⏳ %s" (defaultArg model.Status "")
+            }
+
+            // No `value` attribute: native <progress> renders indeterminate,
+            // and Bulma animates that state with a moving stripe.
+            progress {
+                attr.``class`` "progress is-warning"
+                attr.style "height: 4px;"
+                attr.max "100"
+            }
         }
 
-        label {
+        // Bulma's own file-upload component (file/file-label/file-cta) rather
+        // than a hand-rolled box+label; the large dashed dropzone look is
+        // layered on top via inline style since is-boxed alone is sized more
+        // like a button.
+        div {
             attr.id "drop-zone"
-            attr.``for`` "file-input"
-            attr.``class`` "box has-text-centered"
+            attr.``class`` "file is-boxed"
 
             attr.style
-                "border: 2px dashed #999; padding: 3rem; cursor: pointer; display: block; transition: border-color 0.15s ease, background-color 0.15s ease;"
+                "border: 2px dashed #999; padding: 2rem; width: 100%; display: flex; justify-content: center; cursor: pointer; transition: border-color 0.15s ease, background-color 0.15s ease;"
 
-            p {
-                attr.``class`` "is-size-1 mb-2"
-                "📤"
-            }
+            label {
+                attr.``class`` "file-label"
+                attr.style "cursor: pointer; align-items: center;"
 
-            p {
-                attr.``class`` "is-size-5"
-                "Drag & drop Touchstone files here, or click to browse"
-            }
+                input {
+                    attr.id "file-input"
+                    attr.``class`` "file-input"
+                    attr.``type`` "file"
+                    attr.multiple true
+                }
 
-            input {
-                attr.id "file-input"
-                attr.``type`` "file"
-                attr.multiple true
-                attr.style "display: none"
+                span {
+                    attr.``class`` "file-cta"
+                    attr.style "border: none; background: none;"
+
+                    span {
+                        attr.``class`` "file-icon is-size-1"
+                        "📤"
+                    }
+
+                    span {
+                        attr.``class`` "file-label is-size-5"
+                        "Drag & drop Touchstone files here, or click to browse"
+                    }
+                }
             }
         }
 
