@@ -193,3 +193,18 @@ let parse (fileName: string) (content: string) : TouchstoneFile =
 
 /// Reads and parses a Touchstone file from disk.
 let read (path: string) : TouchstoneFile = parse path (File.ReadAllText path)
+
+/// A copy of `data` restricted to the points whose frequency (Hz) falls
+/// within [loHz, hiHz] inclusive. Used by the web UI's per-file frequency
+/// range slider — charts and CSV export just see a smaller file, so no
+/// chart-building code needs to know about range selection at all.
+let windowed (loHz: float) (hiHz: float) (data: TouchstoneFile) =
+    let keptIndices =
+        data.Frequencies
+        |> Array.indexed
+        |> Array.filter (fun (_, f) -> f >= loHz && f <= hiHz)
+        |> Array.map fst
+
+    { data with
+        Frequencies = keptIndices |> Array.map (fun idx -> data.Frequencies.[idx])
+        Matrices = keptIndices |> Array.map (fun idx -> data.Matrices.[idx]) }

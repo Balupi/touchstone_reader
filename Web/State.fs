@@ -6,7 +6,10 @@ open TouchstoneReader.TouchstonePlot
 
 type LoadedFile =
     { FileName: string
-      Data: Result<TouchstoneFile, string> }
+      Data: Result<TouchstoneFile, string>
+      /// GHz sub-range to display for this file; None means the full sweep
+      /// (its first/last frequency point), which is also the default.
+      FreqRangeGHz: (float * float) option }
 
 /// Which collapsible section a ToggleParam message applies to.
 type ChartKind =
@@ -52,6 +55,8 @@ type Message =
     /// Only meaningful for MagnitudeChart/GroupDelayChart — the other two
     /// chart kinds never show min/max markers (see TouchstonePlot.fs).
     | SetShowExtrema of chart: ChartKind * show: bool
+    | SetFreqRange of fileName: string * loGHz: float * hiGHz: float
+    | ResetFreqRange of fileName: string
     | SetStatus of string option
 
 let update message model =
@@ -63,7 +68,7 @@ let update message model =
             with ex ->
                 Error ex.Message
 
-        let entry = { FileName = fileName; Data = result }
+        let entry = { FileName = fileName; Data = result; FreqRangeGHz = None }
 
         let files =
             if model.Files |> List.exists (fun f -> f.FileName = fileName) then
@@ -91,12 +96,29 @@ let update message model =
     | SetShowExtrema(MagnitudeChart, show) -> { model with ShowMagnitudeExtrema = show }
     | SetShowExtrema(GroupDelayChart, show) -> { model with ShowGroupDelayExtrema = show }
     | SetShowExtrema(_, _) -> model
+    | SetFreqRange(fileName, loGHz, hiGHz) ->
+        let lo, hi = min loGHz hiGHz, max loGHz hiGHz
+
+        { model with
+            Files =
+                model.Files
+                |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeGHz = Some(lo, hi) } else f) }
+    | ResetFreqRange fileName ->
+        { model with
+            Files = model.Files |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeGHz = None } else f) }
     | SetStatus status -> { model with Status = status }
 
-/// The Ok files, paired with their filename for use as an overlay chart label.
+/// The Ok files, paired with their filename for use as an overlay chart
+/// label, windowed down to each file's selected frequency range (if any).
 let okFiles (model: Model) =
     model.Files
     |> List.choose (fun f ->
         match f.Data with
-        | Ok data -> Some(f.FileName, data)
+        | Ok data ->
+            let windowedData =
+                match f.FreqRangeGHz with
+                | Some(lo, hi) -> windowed (lo * 1e9) (hi * 1e9) data
+                | None -> data
+
+            Some(f.FileName, windowedData)
         | Error _ -> None)

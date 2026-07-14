@@ -1,12 +1,24 @@
 /// Bolero view for the Touchstone web app.
 module TouchstoneReader.Web.View
 
+open System
+open System.Globalization
 open Bolero
 open Bolero.Html
 open Elmish
 open TouchstoneReader.Touchstone
 open TouchstoneReader.TouchstonePlot
 open TouchstoneReader.Web.State
+
+/// Range-input `.Value` is always a plain "."-decimal string per the HTML
+/// spec, regardless of page locale — parse/format with InvariantCulture
+/// rather than F#'s `string`/`float`, which pick up the current culture and
+/// would emit e.g. "1,5" under a German locale, silently breaking the
+/// round-trip back into the input's `value` attribute.
+let private parseInvariant (v: obj) =
+    Double.Parse(string v, CultureInfo.InvariantCulture)
+
+let private formatInvariant (v: float) = v.ToString(CultureInfo.InvariantCulture)
 
 let private fileSummaryTags (data: TouchstoneFile) =
     [ sprintf "%d-port" data.Ports
@@ -26,6 +38,77 @@ let private colorSwatch (fileName: string) =
                 (fileColor fileName)
         )
     }
+
+/// Per-file frequency-range crop, as one slider with two handles: two native
+/// range inputs stacked exactly on top of each other (`.range-dual` in
+/// index.html hides each input's own track and touch-target, leaving only
+/// its thumb interactive, so the overlap doesn't block either handle from
+/// being dragged). Bounded by the file's actual sweep, defaulting to the
+/// full range. Changes commit on release (`on.change`, not `on.input`)
+/// since every change re-downsamples and re-renders every chart this file
+/// appears in — doing that on every drag tick would be janky. `update`
+/// (State.fs) clamps lo/hi so the handles can't cross.
+let private freqRangeSlider (dispatch: Dispatch<Message>) (fileName: string) (data: TouchstoneFile) (range: (float * float) option) =
+    if data.Frequencies.Length < 2 then
+        empty ()
+    else
+        let fullLo = data.Frequencies.[0] / 1e9
+        let fullHi = data.Frequencies.[data.Frequencies.Length - 1] / 1e9
+        let lo, hi = defaultArg range (fullLo, fullHi)
+        let step = formatInvariant ((fullHi - fullLo) / 500.0)
+        let pct v = (v - fullLo) / (fullHi - fullLo) * 100.0
+
+        div {
+            attr.``class`` "mt-3"
+
+            div {
+                attr.``class`` "is-flex is-align-items-center is-justify-content-space-between"
+
+                p {
+                    attr.``class`` "is-size-7 has-text-grey"
+                    sprintf "Frequenzbereich: %.3f – %.3f GHz" lo hi
+                }
+
+                if range.IsSome then
+                    button {
+                        attr.``class`` "button is-white is-size-7 p-0"
+                        attr.style "height: auto; border: none;"
+                        on.click (fun _ -> dispatch (ResetFreqRange fileName))
+                        "Zurücksetzen"
+                    }
+            }
+
+            div {
+                attr.``class`` "range-dual-wrap"
+
+                div { attr.``class`` "range-dual-track" }
+
+                div {
+                    attr.``class`` "range-dual-selected"
+                    attr.style (sprintf "left: %.3f%%; width: %.3f%%;" (pct lo) (pct hi - pct lo))
+                }
+
+                input {
+                    attr.``class`` "range-dual"
+                    attr.``type`` "range"
+                    attr.min (formatInvariant fullLo)
+                    attr.max (formatInvariant fullHi)
+                    attr.step step
+                    attr.value (formatInvariant lo)
+                    on.change (fun e -> dispatch (SetFreqRange(fileName, parseInvariant e.Value, hi)))
+                }
+
+                input {
+                    attr.``class`` "range-dual"
+                    attr.``type`` "range"
+                    attr.min (formatInvariant fullLo)
+                    attr.max (formatInvariant fullHi)
+                    attr.step step
+                    attr.value (formatInvariant hi)
+                    on.change (fun e -> dispatch (SetFreqRange(fileName, lo, parseInvariant e.Value)))
+                }
+            }
+        }
 
 let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
     let deleteButton =
@@ -70,6 +153,8 @@ let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
                             t
                         }
                 }
+
+                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz
 
                 if not data.Comments.IsEmpty then
                     div {

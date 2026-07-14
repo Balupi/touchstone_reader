@@ -64,7 +64,18 @@ type App() =
                 if ok.IsEmpty then
                     None
                 else
-                    let filesKey = ok |> List.map fst |> String.concat "|"
+                    // Includes each file's (now-windowed) point count and
+                    // bounds, not just its name, so narrowing a file's
+                    // frequency-range slider invalidates every section's
+                    // cache the same way changing the file selection does.
+                    let filesKey =
+                        ok
+                        |> List.map (fun (name, data) ->
+                            let n = data.Frequencies.Length
+                            let lo = if n > 0 then data.Frequencies.[0] else 0.0
+                            let hi = if n > 0 then data.Frequencies.[n - 1] else 0.0
+                            sprintf "%s@%d:%g-%g" name n lo hi)
+                        |> String.concat "|"
 
                     let keyOf (selected: (int * int) list) =
                         filesKey + "##" + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")

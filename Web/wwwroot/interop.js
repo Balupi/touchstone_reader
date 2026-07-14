@@ -116,11 +116,34 @@ window.touchstoneInterop = {
         return layout;
     },
 
+    // On screen, color alone (touchstoneInterop.fileColor in TouchstonePlot.fs)
+    // is enough to tell files apart. The print/monochrome export flattens
+    // every line to black, so files need a second cue there — a per-file
+    // dash pattern, assigned only for this export and never shown on screen.
+    _dashCycle: ['solid', 'dot', 'dash', 'dashdot', 'longdash', 'longdashdot'],
+
+    // Trace names are built in TouchstonePlot.fs as "<filename> <Param><i><j>"
+    // (e.g. "deviceA.s2p S11") — strips that known "<Letter><digits>" suffix
+    // to recover the filename, which is otherwise not attached to the trace
+    // in any dedicated field.
+    _fileDashFor: function (traceName) {
+        if (!traceName) return 'solid';
+        const match = traceName.match(/^(.*)\s[A-Za-z]\d+$/);
+        const label = match ? match[1] : traceName;
+        let h = 0;
+        for (let i = 0; i < label.length; i++) {
+            h = (h * 31 + label.charCodeAt(i)) | 0;
+        }
+        const cycle = window.touchstoneInterop._dashCycle;
+        return cycle[((h % cycle.length) + cycle.length) % cycle.length];
+    },
+
     _monochromeData: function (data) {
         return data.map((trace) => {
             const isGridLine = trace.showlegend === false;
+            const dash = isGridLine ? trace.line && trace.line.dash : window.touchstoneInterop._fileDashFor(trace.name);
             return Object.assign({}, trace, {
-                line: Object.assign({}, trace.line, { color: '#000000', width: isGridLine ? 1 : 2.5 }),
+                line: Object.assign({}, trace.line, { color: '#000000', width: isGridLine ? 1 : 2.5, dash: dash }),
             });
         });
     },
