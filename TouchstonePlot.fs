@@ -97,13 +97,18 @@ let private lttb (threshold: int) (points: (float * float)[]) =
         sampled.Add points.[n - 1]
         sampled.ToArray()
 
-/// A rendered chart plus a CSV rendition of the same (non-downsampled) data,
-/// for the web app's per-chart CSV download button. The single-file/CLI
-/// chart functions don't need this — only the web app's multi-file `*Multi`
-/// functions return it.
+/// A rendered chart plus a thunk producing a CSV rendition of the same
+/// (non-downsampled) data, for the web app's per-chart CSV download button.
+/// `Csv` is a function rather than an already-built string because building
+/// it (a full string per point, unlike the chart itself which is capped at
+/// maxPointsPerTrace) is real, avoidable work — under WASM this was showing
+/// up as multiple extra seconds per render for large real-world sweeps, paid
+/// on every render even though the button is clicked rarely. The
+/// single-file/CLI chart functions don't need any of this — only the web
+/// app's multi-file `*Multi` functions return it.
 type ChartResult =
     { Chart: GenericChart.GenericChart
-      Csv: string }
+      Csv: unit -> string }
 
 /// CSV with each series as its own "label"/"label" x/y column pair —
 /// ragged (shorter series get blank cells) rather than interpolated onto a
@@ -308,7 +313,7 @@ let private quadMulti
             |> Chart.withShapes shapes
             |> Chart.withAnnotations annotations
 
-        Some { Chart = chart; Csv = toCsv "Frequency (GHz)" unit allSeries }
+        Some { Chart = chart; Csv = fun () -> toCsv "Frequency (GHz)" unit allSeries }
 
 /// Grid of magnitude (dB) subplots, each optionally annotated with its
 /// global min/max — see quadMulti.
@@ -441,7 +446,7 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
                 |> Chart.combine
                 |> smithLayout
 
-            Some { Chart = chart; Csv = toCsv "Re(Γ)" "Im(Γ)" series }
+            Some { Chart = chart; Csv = fun () -> toCsv "Re(Γ)" "Im(Γ)" series }
 
 /// Unwraps a sequence of angles (radians) so consecutive jumps greater than
 /// π get folded by ±2π, producing a continuous curve. Raw S-parameter phase
@@ -579,7 +584,7 @@ let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files
                 |> Chart.withShapes shapes
                 |> Chart.withAnnotations annotations
 
-            Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Group Delay (ns)" series }
+            Some { Chart = chart; Csv = fun () -> toCsv "Frequency (GHz)" "Group Delay (ns)" series }
 
 /// Like groupDelayChartMulti, but each file's curve is its deviation (ns)
 /// from the pointwise mean across all loaded files, instead of the absolute
@@ -611,7 +616,7 @@ let groupDelayDeviationChartMulti (showExtrema: bool) (selected: (int * int) lis
                 |> Chart.withShapes shapes
                 |> Chart.withAnnotations annotations
 
-            Some { Chart = chart; Csv = toCsv "Frequency (GHz)" "Δ Group Delay (ns)" series }
+            Some { Chart = chart; Csv = fun () -> toCsv "Frequency (GHz)" "Δ Group Delay (ns)" series }
 
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.
 let show (data: TouchstoneFile) =

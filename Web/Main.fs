@@ -22,12 +22,25 @@ type App() =
     // re-entering this method (Blazor calls OnAfterRenderAsync after every
     // render) and racing to redo or prematurely clear the same work.
     let mutable isRendering = false
+    // Each chart's CSV thunk, kept instead of a built string so it's only
+    // materialized on demand (GetCsv, called from the download button) —
+    // building it eagerly for every render was real, mostly-wasted work for
+    // large real-world sweeps (see ChartResult in TouchstonePlot.fs).
+    let mutable lastCsvThunks: Map<string, unit -> string> = Map.empty
 
     let view model dispatch =
         currentModel <- model
         renderView model dispatch
 
     override this.Program = Program.mkSimple (fun _ -> initModel) update view
+
+    /// Builds the CSV for one chart on demand — called from interop.js's
+    /// download button instead of the CSV being pre-built on every render.
+    [<JSInvokable>]
+    member this.GetCsv(divId: string) : string =
+        match lastCsvThunks.TryFind divId with
+        | Some thunk -> thunk ()
+        | None -> ""
 
     [<JSInvokable>]
     member this.OnFileDropped(fileName: string, content: string) =
@@ -109,6 +122,7 @@ type App() =
                     lastPhaseKey <- None
                     lastSmithKey <- None
                     lastGroupDelayKey <- None
+                    lastCsvThunks <- Map.empty
 
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
@@ -147,13 +161,10 @@ type App() =
                         lastGroupDelayKey <- Some w.GdKey
 
                         let render (divId: string) (result: ChartResult) : Task =
+                            lastCsvThunks <- lastCsvThunks |> Map.add divId result.Csv
+
                             this.JSRuntime
-                                .InvokeVoidAsync(
-                                    "touchstoneInterop.renderChart",
-                                    divId,
-                                    GenericChart.toFigureJson result.Chart,
-                                    result.Csv
-                                )
+                                .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson result.Chart)
                                 .AsTask()
 
                         if needsMagnitude then

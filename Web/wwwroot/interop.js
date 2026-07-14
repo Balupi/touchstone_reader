@@ -1,5 +1,9 @@
 window.touchstoneInterop = {
     setupDropZone: function (elementId, dotNetRef) {
+        // Kept for downloadCsv, which needs to call back into .NET
+        // (GetCsv) on demand — it's otherwise only ever passed in here.
+        window.touchstoneInterop._dotNetRef = dotNetRef;
+
         const el = document.getElementById(elementId);
         if (!el) return;
 
@@ -154,8 +158,7 @@ window.touchstoneInterop = {
     // camera button since its own download path always captures the current
     // on-screen colors as-is.
     // Triggers a browser download of `text` as `filename` via a throwaway
-    // Blob URL + synthetic anchor click — no server round-trip needed since
-    // the CSV is already fully built on the .NET side.
+    // Blob URL + synthetic anchor click.
     _downloadText: function (filename, text) {
         const blob = new Blob([text], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
@@ -168,10 +171,15 @@ window.touchstoneInterop = {
 
     // Shared by the modebar's CSV button and the always-visible "CSV" button
     // in each chart section's toggle row (added because the modebar only
-    // reveals itself on hover and its icons are easy to miss/mix up).
+    // reveals itself on hover and its icons are easy to miss/mix up). Calls
+    // back into .NET (GetCsv) to build the CSV on demand rather than reading
+    // an already-built one — it's not sent over with the chart's own figure
+    // JSON, since building it eagerly on every render was wasted work most
+    // of the time (see ChartResult in TouchstonePlot.fs).
     downloadCsv: function (divId) {
-        const fig = window.touchstoneInterop._lastFigures[divId];
-        if (fig && fig.csv) window.touchstoneInterop._downloadText(divId + '.csv', fig.csv);
+        window.touchstoneInterop._dotNetRef.invokeMethodAsync('GetCsv', divId).then((csv) => {
+            if (csv) window.touchstoneInterop._downloadText(divId + '.csv', csv);
+        });
     },
 
     _config: function (divId) {
@@ -211,11 +219,10 @@ window.touchstoneInterop = {
         };
     },
 
-    renderChart: function (divId, figureJson, csv) {
+    renderChart: function (divId, figureJson) {
         const el = document.getElementById(divId);
         if (!el) return;
         const fig = JSON.parse(figureJson);
-        fig.csv = csv;
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.
