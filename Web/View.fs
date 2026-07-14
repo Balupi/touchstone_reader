@@ -39,22 +39,56 @@ let private colorSwatch (fileName: string) =
         )
     }
 
+/// The union of every loaded (successfully parsed) file's own native
+/// frequency range — the shared slider bounds while ranges are linked, so a
+/// linked slider can reach every loaded file's full extent rather than
+/// being capped at whichever file happens to be narrowest.
+let private unionFreqRangeGHz (files: LoadedFile list) =
+    let bounds =
+        files
+        |> List.choose (fun f ->
+            match f.Data with
+            | Ok data when data.Frequencies.Length > 0 ->
+                Some(data.Frequencies.[0] / 1e9, data.Frequencies.[data.Frequencies.Length - 1] / 1e9)
+            | _ -> None)
+
+    match bounds with
+    | [] -> None
+    | _ -> Some(bounds |> List.map fst |> List.min, bounds |> List.map snd |> List.max)
+
 /// Per-file frequency-range crop, as one slider with two handles: two native
 /// range inputs stacked exactly on top of each other (`.range-dual` in
 /// index.html hides each input's own track and touch-target, leaving only
 /// its thumb interactive, so the overlap doesn't block either handle from
-/// being dragged). Bounded by the file's actual sweep, defaulting to the
-/// full range. Changes commit on release (`on.change`, not `on.input`)
-/// since every change re-downsamples and re-renders every chart this file
-/// appears in — doing that on every drag tick would be janky. `update`
-/// (State.fs) clamps lo/hi so the handles can't cross.
-let private freqRangeSlider (dispatch: Dispatch<Message>) (fileName: string) (data: TouchstoneFile) (range: (float * float) option) =
+/// being dragged). Bounded by the file's actual sweep (or, while ranges are
+/// linked, the union of every loaded file's sweep — see unionFreqRangeGHz),
+/// defaulting to the full range. Changes commit on release (`on.change`, not
+/// `on.input`) since every change re-downsamples and re-renders every chart
+/// this file appears in — doing that on every drag tick would be janky.
+/// `update` (State.fs) clamps lo/hi so the handles can't cross, and fans a
+/// linked change out to every file.
+let private freqRangeSlider
+    (dispatch: Dispatch<Message>)
+    (fileName: string)
+    (data: TouchstoneFile)
+    (range: (float * float) option)
+    (linked: bool)
+    (unionRange: (float * float) option)
+    =
     if data.Frequencies.Length < 2 then
         empty ()
     else
-        let fullLo = data.Frequencies.[0] / 1e9
-        let fullHi = data.Frequencies.[data.Frequencies.Length - 1] / 1e9
+        let ownLo = data.Frequencies.[0] / 1e9
+        let ownHi = data.Frequencies.[data.Frequencies.Length - 1] / 1e9
+        let fullLo, fullHi = if linked then defaultArg unionRange (ownLo, ownHi) else (ownLo, ownHi)
+        // Clamped to the *current* slider bounds: a stored range picked up
+        // while linked to a wider union can exceed a narrower file's own
+        // bounds once unlinked again. Cosmetic only — windowed() (State.fs)
+        // already intersects with the file's actual data regardless, so
+        // this just keeps the label/thumbs from showing a value the slider
+        // itself can't reach.
         let lo, hi = defaultArg range (fullLo, fullHi)
+        let lo, hi = max lo fullLo |> min fullHi, max hi fullLo |> min fullHi
         let step = formatInvariant ((fullHi - fullLo) / 500.0)
         let pct v = (v - fullLo) / (fullHi - fullLo) * 100.0
 
@@ -110,7 +144,12 @@ let private freqRangeSlider (dispatch: Dispatch<Message>) (fileName: string) (da
             }
         }
 
-let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
+let private fileTag
+    (dispatch: Dispatch<Message>)
+    (linked: bool)
+    (unionRange: (float * float) option)
+    (f: LoadedFile)
+    =
     let deleteButton =
         button {
             attr.``class`` "delete"
@@ -154,7 +193,7 @@ let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
                         }
                 }
 
-                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz
+                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz linked unionRange
 
                 if not data.Comments.IsEmpty then
                     div {
@@ -326,6 +365,24 @@ let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show
         }
     }
 
+/// Checked, dragging any one file's frequency-range slider moves every
+/// file's slider along with it (to the same GHz bounds); unchecked, each
+/// slider moves independently. Only shown once there's more than one file
+/// to actually link. Default checked (State.fs's initModel).
+let private linkFreqRangesToggle (dispatch: Dispatch<Message>) (linked: bool) =
+    label {
+        attr.``class`` "checkbox is-size-7 has-text-grey mb-2 is-flex is-align-items-center"
+
+        input {
+            attr.``type`` "checkbox"
+            attr.``class`` "mr-2"
+            attr.``checked`` linked
+            on.click (fun _ -> dispatch (SetLinkFreqRanges(not linked)))
+        }
+
+        "Frequenzbereich-Slider aller Dateien verknüpfen"
+    }
+
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
         attr.``class`` "container mt-5 px-4"
@@ -431,8 +488,15 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                     }
                 }
 
+                let okCount = model.Files |> List.filter (fun f -> match f.Data with Ok _ -> true | Error _ -> false) |> List.length
+
+                if okCount >= 2 then
+                    linkFreqRangesToggle dispatch model.LinkFreqRanges
+
+                let unionRange = unionFreqRangeGHz model.Files
+
                 for f in model.Files do
-                    fileTag dispatch f
+                    fileTag dispatch model.LinkFreqRanges unionRange f
 
                 let ok = okFiles model
                 let has2Port = ok |> List.exists (fun (_, data) -> data.Ports = 2)

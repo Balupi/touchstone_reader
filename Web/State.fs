@@ -33,6 +33,9 @@ type Model =
       GroupDelayMode: DisplayMode
       ShowMagnitudeExtrema: bool
       ShowGroupDelayExtrema: bool
+      /// When set, dragging any one file's frequency-range slider applies
+      /// the same GHz bounds to every loaded file instead of just that one.
+      LinkFreqRanges: bool
       Status: string option }
 
 let initModel =
@@ -44,6 +47,7 @@ let initModel =
       GroupDelayMode = Absolute
       ShowMagnitudeExtrema = true
       ShowGroupDelayExtrema = true
+      LinkFreqRanges = true
       Status = None }
 
 type Message =
@@ -57,6 +61,7 @@ type Message =
     | SetShowExtrema of chart: ChartKind * show: bool
     | SetFreqRange of fileName: string * loGHz: float * hiGHz: float
     | ResetFreqRange of fileName: string
+    | SetLinkFreqRanges of bool
     | SetStatus of string option
 
 let update message model =
@@ -99,13 +104,22 @@ let update message model =
     | SetFreqRange(fileName, loGHz, hiGHz) ->
         let lo, hi = min loGHz hiGHz, max loGHz hiGHz
 
-        { model with
-            Files =
-                model.Files
-                |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeGHz = Some(lo, hi) } else f) }
+        let apply f =
+            if model.LinkFreqRanges || f.FileName = fileName then
+                { f with FreqRangeGHz = Some(lo, hi) }
+            else
+                f
+
+        { model with Files = model.Files |> List.map apply }
     | ResetFreqRange fileName ->
-        { model with
-            Files = model.Files |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeGHz = None } else f) }
+        let apply f =
+            if model.LinkFreqRanges || f.FileName = fileName then
+                { f with FreqRangeGHz = None }
+            else
+                f
+
+        { model with Files = model.Files |> List.map apply }
+    | SetLinkFreqRanges linked -> { model with LinkFreqRanges = linked }
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart
