@@ -25,7 +25,8 @@ type TouchstoneFile =
       Option: OptionLine
       References: float list
       Frequencies: float[]      // Hz
-      Matrices: Complex[,][] }  // one (ports+1)x(ports+1) matrix per frequency, 1-indexed
+      Matrices: Complex[,][]    // one (ports+1)x(ports+1) matrix per frequency, 1-indexed
+      Comments: string list }   // '!' lines before the first non-comment line, e.g. instrument/date info
 
 let private freqMultiplier = function
     | Hz -> 1.0 | KHz -> 1e3 | MHz -> 1e6 | GHz -> 1e9
@@ -83,8 +84,23 @@ let private entryOrder (ports: int) (matrixFmt: MatrixFormat) (twoPortOrder: Two
 /// Reference / Matrix Format / Two-Port Data Order / Network Data / End.
 /// Noise-data blocks are skipped.
 let parse (fileName: string) (content: string) : TouchstoneFile =
+    let rawLines = content.Replace("\r\n", "\n").Split('\n')
+
+    // Touchstone has no dedicated metadata section, but by convention the
+    // instrument/calibration/date info (if any) lives in '!' comment lines
+    // before the file settles into its option/data lines — so that's the
+    // block worth surfacing. Comments elsewhere (inline on a data line, or
+    // interspersed later) are just noise and stay discarded via stripComment.
+    let comments =
+        rawLines
+        |> Array.map (fun l -> l.Trim())
+        |> Array.takeWhile (fun l -> l = "" || l.StartsWith "!")
+        |> Array.filter (fun l -> l.StartsWith "!")
+        |> Array.map (fun l -> l.TrimStart('!').Trim())
+        |> Array.toList
+
     let lines =
-        content.Replace("\r\n", "\n").Split('\n')
+        rawLines
         |> Array.map stripComment
         |> Array.map (fun l -> l.Trim())
         |> Array.filter (fun l -> l.Length > 0)
@@ -168,7 +184,12 @@ let parse (fileName: string) (content: string) : TouchstoneFile =
             m.[r, c] <- toComplex opt.Format a b)
         matrices.[f] <- m
 
-    { Ports = ports; Option = opt; References = references; Frequencies = freqs; Matrices = matrices }
+    { Ports = ports
+      Option = opt
+      References = references
+      Frequencies = freqs
+      Matrices = matrices
+      Comments = comments }
 
 /// Reads and parses a Touchstone file from disk.
 let read (path: string) : TouchstoneFile = parse path (File.ReadAllText path)

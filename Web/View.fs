@@ -15,6 +15,18 @@ let private fileSummaryTags (data: TouchstoneFile) =
       sprintf "%A" data.Option.Format
       sprintf "R=%.0f Ω" data.Option.R ]
 
+/// A small filled circle in the file's plot color (see TouchstonePlot.fileColor),
+/// so the color used for a file's traces on every chart is identifiable at a
+/// glance in the file list too, without needing to check the legend.
+let private colorSwatch (fileName: string) =
+    span {
+        attr.style (
+            sprintf
+                "display:inline-block; width:0.8em; height:0.8em; border-radius:50%%; background-color:%s; margin-right:0.5rem; flex-shrink:0;"
+                (fileColor fileName)
+        )
+    }
+
 let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
     let deleteButton =
         button {
@@ -25,21 +37,49 @@ let private fileTag (dispatch: Dispatch<Message>) (f: LoadedFile) =
     match f.Data with
     | Ok data ->
         div {
-            attr.``class`` "notification is-info mt-2"
-            deleteButton
-
-            p {
-                attr.``class`` "has-text-weight-semibold"
-                f.FileName
-            }
+            attr.``class`` "box mt-2 py-2 px-3"
 
             div {
-                attr.``class`` "tags mt-2 mb-0"
+                attr.``class`` "is-flex is-align-items-center"
+                colorSwatch f.FileName
 
-                for t in fileSummaryTags data do
-                    span {
-                        attr.``class`` "tag"
-                        t
+                span {
+                    attr.``class`` "has-text-weight-semibold mr-auto"
+                    f.FileName
+                }
+
+                deleteButton
+            }
+
+            // Collapsed by default so a list of several files stays compact;
+            // the per-file metadata and header comments are a click away
+            // instead of always taking up a whole notification block each.
+            details {
+                summary {
+                    attr.``class`` "has-text-grey is-size-7 mt-1"
+                    attr.style "cursor: pointer;"
+                    "Details"
+                }
+
+                div {
+                    attr.``class`` "tags mt-2 mb-0"
+
+                    for t in fileSummaryTags data do
+                        span {
+                            attr.``class`` "tag"
+                            t
+                        }
+                }
+
+                if not data.Comments.IsEmpty then
+                    div {
+                        attr.``class`` "content is-small mt-2 mb-0"
+
+                        for c in data.Comments do
+                            p {
+                                attr.``class`` "mb-1"
+                                c
+                            }
                     }
             }
         }

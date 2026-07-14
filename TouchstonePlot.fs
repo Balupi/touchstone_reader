@@ -14,6 +14,50 @@ let private toDeg (c: Complex) = c.Phase * 180.0 / Math.PI
 /// chart's pixel width, so the reduction is invisible at normal zoom levels.
 let private maxPointsPerTrace = 1500
 
+/// Fixed per-file palette/dash-cycle, assigned explicitly per trace instead
+/// of leaving color to Plotly's default per-trace-index cycling — that cycle
+/// runs across *all* traces in a subplot grid, not per file, so the same
+/// file previously came out a different color in every subplot. Colors are
+/// also reused as the web UI's file-list swatch, so what's plotted always
+/// matches what's shown there.
+let private filePalette =
+    [| "#3298dc"; "#f14668"; "#48c78e"; "#ffdd57"; "#485fc7"; "#00d1b2"; "#ff6b81"; "#9b59b6" |]
+
+/// Independent from the color cycle (different length) so two files that
+/// happen to land on the same color cycle position don't also share a dash
+/// pattern — the pattern is what still tells them apart once the monochrome/
+/// print export strips color down to black.
+let private fileDashes =
+    [| StyleParam.DrawingStyle.Solid
+       StyleParam.DrawingStyle.Dash
+       StyleParam.DrawingStyle.Dot
+       StyleParam.DrawingStyle.DashDot
+       StyleParam.DrawingStyle.LongDash
+       StyleParam.DrawingStyle.LongDashDot |]
+
+/// Deterministic index from a file's label, so its color/dash stay the same
+/// across renders and don't shift when other files are added/removed —
+/// unlike an index into the current file list, which would.
+let private stableIndex (n: int) (label: string) =
+    let h = hash label
+    ((h % n) + n) % n
+
+/// Deterministic per-file color — same file, same color, in every chart it
+/// appears in. Also used by the web UI for each file's color swatch.
+let fileColor (label: string) = filePalette.[stableIndex filePalette.Length label]
+
+let private fileDash (label: string) = fileDashes.[stableIndex fileDashes.Length label]
+
+/// A line trace, colored/dashed per-file when `label` is a real filename
+/// (multi-file web overlays); left to Plotly's own default per-trace-index
+/// coloring when `label = ""` (single-file CLI charts, which need each Sij
+/// distinguished from the others, not each file — there's only one file).
+let private styledLine (label: string) (name: string) (xs: float[]) (ys: float[]) =
+    if label = "" then
+        Chart.Line(x = xs, y = ys, Name = name)
+    else
+        Chart.Line(x = xs, y = ys, Name = name, LineColor = Color.fromString (fileColor label), LineDash = fileDash label)
+
 /// Largest-Triangle-Three-Buckets downsampling: reduces a series to
 /// `threshold` points while preferentially keeping visually significant ones
 /// (peaks, dips, notches), unlike naive every-Nth-point decimation which can
@@ -152,7 +196,7 @@ let private oneParamTrace (label: string) (toY: Complex -> float) (i: int) (j: i
     let points = Array.zip freqGHz ys |> lttb maxPointsPerTrace
     let name = sprintf "%A%d%d" data.Option.Parameter i j
     let name = if label = "" then name else sprintf "%s %s" label name
-    Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
+    styledLine label name (points |> Array.map fst) (points |> Array.map snd)
 
 /// Line traces for every Sij (or Yij/Zij/...) of one file.
 let private paramTraces (label: string) (toY: Complex -> float) (data: TouchstoneFile) =
@@ -351,7 +395,7 @@ let private smithTraces (label: string) (selected: (int * int) list) (data: Touc
 
         let name = sprintf "S%d%d" i i
         let name = if label = "" then name else sprintf "%s %s" label name
-        Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name))
+        styledLine label name (points |> Array.map fst) (points |> Array.map snd))
 
 let private smithLayout (chart: GenericChart.GenericChart) =
     let axisRange = StyleParam.Range.MinMax(-1.15, 1.15)
@@ -455,7 +499,7 @@ let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneF
     let points = Array.zip freqGHz delayNs |> lttb maxPointsPerTrace
     let name = sprintf "%A%d%d" data.Option.Parameter i j
     let name = if label = "" then name else sprintf "%s %s" label name
-    Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
+    styledLine label name (points |> Array.map fst) (points |> Array.map snd)
 
 /// Linear interpolation of the series (xs, ys) at x; xs must be sorted
 /// ascending. Clamps to the nearest endpoint outside the series' range.
@@ -506,7 +550,7 @@ let private groupDelayDeviationSeriesAndTraces (i: int) (j: int) (files: (string
                 let deviation = Array.init n (fun k -> ys.[k] - mean.[k])
                 let name = (sprintf "%s S%d%d" label i j).Trim()
                 let points = Array.zip freqGHz deviation |> lttb maxPointsPerTrace
-                let trace = Chart.Line(x = (points |> Array.map fst), y = (points |> Array.map snd), Name = name)
+                let trace = styledLine label name (points |> Array.map fst) (points |> Array.map snd)
                 trace, (name, freqGHz, deviation))
 
         results |> List.map fst, results |> List.map snd
