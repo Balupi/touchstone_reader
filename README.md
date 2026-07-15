@@ -74,3 +74,13 @@ smithChart data |> Chart.show      // S-parameters only: Sii on a Smith grid
   (Full/Lower/Upper), `[Two-Port Data Order]`, `[Network Data]` / `[End]`.
 - Not covered: noise-data blocks are parsed past but not exposed/plotted; mixed-mode
   parameters.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+This project depends on [Bolero](https://fsbolero.io) (Apache License 2.0) for
+the web frontend, and [Plotly.NET](https://plotly.net) and
+[plotly.js](https://plotly.com/javascript/) (both MIT) for charting. Their own
+licenses apply to those libraries; using TouchstoneReader under the MIT
+license above doesn't change that.
