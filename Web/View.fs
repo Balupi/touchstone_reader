@@ -18,7 +18,26 @@ open TouchstoneReader.Web.State
 let private parseInvariant (v: obj) =
     Double.Parse(string v, CultureInfo.InvariantCulture)
 
+/// Like parseInvariant, but for the free-typed number inputs (frequency
+/// bounds): unlike a range input's value, what's typed there can be blank
+/// or not-yet-a-number mid-edit, so this doesn't throw on that.
+let private tryParseInvariant (v: obj) =
+    match Double.TryParse(string v, NumberStyles.Float, CultureInfo.InvariantCulture) with
+    | true, x -> Some x
+    | false, _ -> None
+
 let private formatInvariant (v: float) = v.ToString(CultureInfo.InvariantCulture)
+
+/// Rounded to the same precision the frequency-range UI displays, so a
+/// typed value and the number it's echoed back as always agree.
+let private formatGHz (v: float) = formatInvariant (Math.Round(v, 3))
+
+/// The actual data point (Hz, converted to GHz) closest to `targetGHz` —
+/// used so typing a frequency-range bound snaps to a real, plottable point
+/// on that file's sweep instead of an arbitrary value nothing lives at.
+let private snapToNearestFreqGHz (data: TouchstoneFile) (targetGHz: float) =
+    let targetHz = targetGHz * 1e9
+    (data.Frequencies |> Array.minBy (fun f -> abs (f - targetHz))) / 1e9
 
 let private fileSummaryTags (data: TouchstoneFile) =
     [ sprintf "%d-port" data.Ports
@@ -72,6 +91,7 @@ let private freqRangeSlider
     (fileName: string)
     (data: TouchstoneFile)
     (range: (float * float) option)
+    (gen: int)
     (linked: bool)
     (unionRange: (float * float) option)
     =
@@ -98,9 +118,51 @@ let private freqRangeSlider
             div {
                 attr.``class`` "is-flex is-align-items-center is-justify-content-space-between"
 
-                p {
-                    attr.``class`` "is-size-7 has-text-grey"
-                    sprintf "Frequenzbereich: %.3f – %.3f GHz" lo hi
+                div {
+                    attr.``class`` "is-flex is-align-items-center"
+
+                    p {
+                        attr.``class`` "mr-2 is-size-7 has-text-grey"
+                        "Frequenzbereich:"
+                    }
+
+                    input {
+                        attr.key (sprintf "%s-lo-%d" fileName gen)
+                        attr.``class`` "input is-small"
+                        attr.style "width: 5rem;"
+                        attr.``type`` "number"
+                        attr.step "any"
+                        attr.value (formatGHz lo)
+
+                        on.change (fun e ->
+                            match tryParseInvariant e.Value with
+                            | Some typed -> dispatch (SetFreqRange(fileName, snapToNearestFreqGHz data typed, hi))
+                            | None -> ())
+                    }
+
+                    p {
+                        attr.``class`` "mx-2 is-size-7 has-text-grey"
+                        "–"
+                    }
+
+                    input {
+                        attr.key (sprintf "%s-hi-%d" fileName gen)
+                        attr.``class`` "input is-small"
+                        attr.style "width: 5rem;"
+                        attr.``type`` "number"
+                        attr.step "any"
+                        attr.value (formatGHz hi)
+
+                        on.change (fun e ->
+                            match tryParseInvariant e.Value with
+                            | Some typed -> dispatch (SetFreqRange(fileName, lo, snapToNearestFreqGHz data typed))
+                            | None -> ())
+                    }
+
+                    p {
+                        attr.``class`` "ml-2 is-size-7 has-text-grey"
+                        "GHz"
+                    }
                 }
 
                 if range.IsSome then
@@ -193,7 +255,7 @@ let private fileTag
                         }
                 }
 
-                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz linked unionRange
+                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz f.FreqRangeGen linked unionRange
 
                 if not data.Comments.IsEmpty then
                     div {
@@ -338,7 +400,8 @@ let private groupDelayModeToggle (dispatch: Dispatch<Message>) (mode: DisplayMod
 /// On/off switch for a chart section's min/max reference lines. Each of
 /// Magnitude and Group Delay gets its own instance with independent state,
 /// embedded in that section (via `chartSection`'s `extraControls`) rather
-/// than a single shared control elsewhere on the page.
+/// than a single shared control elsewhere on the page. A plain toggle
+/// switch (`.switch` in index.html) rather than an An/Aus button pair.
 let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show: bool) =
     div {
         attr.``class`` "field is-grouped is-align-items-center mb-3"
@@ -348,19 +411,18 @@ let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show
             "Min/Max-Markierungen:"
         }
 
-        div {
-            attr.``class`` "buttons has-addons mb-0"
+        label {
+            attr.``class`` "switch"
 
-            button {
-                attr.``class`` (if show then "button is-small is-info is-selected" else "button is-small")
-                on.click (fun _ -> dispatch (SetShowExtrema(chart, true)))
-                "An"
+            input {
+                attr.``type`` "checkbox"
+                attr.``checked`` show
+                on.click (fun _ -> dispatch (SetShowExtrema(chart, not show)))
             }
 
-            button {
-                attr.``class`` (if not show then "button is-small is-info is-selected" else "button is-small")
-                on.click (fun _ -> dispatch (SetShowExtrema(chart, false)))
-                "Aus"
+            span {
+                attr.``class`` "switch-track"
+                span { attr.``class`` "switch-thumb" }
             }
         }
     }

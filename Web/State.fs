@@ -9,7 +9,14 @@ type LoadedFile =
       Data: Result<TouchstoneFile, string>
       /// GHz sub-range to display for this file; None means the full sweep
       /// (its first/last frequency point), which is also the default.
-      FreqRangeGHz: (float * float) option }
+      FreqRangeGHz: (float * float) option
+      /// Bumped on every SetFreqRange/ResetFreqRange touching this file.
+      /// View.fs keys the frequency-bound number inputs on it, forcing
+      /// Blazor to reset their displayed value even when a typed value
+      /// snaps to the number already shown — its normal diffing skips that,
+      /// since from its perspective the rendered value didn't change even
+      /// though the live DOM (what the user actually typed) did.
+      FreqRangeGen: int }
 
 /// Which collapsible section a ToggleParam message applies to.
 type ChartKind =
@@ -73,7 +80,11 @@ let update message model =
             with ex ->
                 Error ex.Message
 
-        let entry = { FileName = fileName; Data = result; FreqRangeGHz = None }
+        let entry =
+            { FileName = fileName
+              Data = result
+              FreqRangeGHz = None
+              FreqRangeGen = 0 }
 
         let files =
             if model.Files |> List.exists (fun f -> f.FileName = fileName) then
@@ -106,7 +117,9 @@ let update message model =
 
         let apply f =
             if model.LinkFreqRanges || f.FileName = fileName then
-                { f with FreqRangeGHz = Some(lo, hi) }
+                { f with
+                    FreqRangeGHz = Some(lo, hi)
+                    FreqRangeGen = f.FreqRangeGen + 1 }
             else
                 f
 
@@ -114,7 +127,9 @@ let update message model =
     | ResetFreqRange fileName ->
         let apply f =
             if model.LinkFreqRanges || f.FileName = fileName then
-                { f with FreqRangeGHz = None }
+                { f with
+                    FreqRangeGHz = None
+                    FreqRangeGen = f.FreqRangeGen + 1 }
             else
                 f
 

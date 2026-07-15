@@ -123,6 +123,61 @@
             cursor: pointer;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
         }
+
+        /* On/off switch (e.g. the Min/Max toggle) — plain Bulma has no switch
+           component, so this styles a native checkbox as one: the checkbox
+           itself is invisible but still the real interactive/focusable
+           element, and .switch-track/.switch-thumb are its visual stand-in. */
+        .switch {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            width: 2.4rem;
+            height: 1.3rem;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .switch input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            margin: 0;
+            cursor: pointer;
+        }
+
+        .switch-track {
+            width: 100%;
+            height: 100%;
+            background: #999;
+            border-radius: 999px;
+            transition: background-color 0.15s ease;
+        }
+
+        .switch-thumb {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 1.05rem;
+            height: 1.05rem;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+            transition: transform 0.15s ease;
+        }
+
+        .switch input:checked~.switch-track {
+            background: #3298dc;
+        }
+
+        .switch input:checked~.switch-track .switch-thumb {
+            transform: translateX(1.1rem);
+        }
+
+        .switch input:focus-visible~.switch-track {
+            outline: 2px solid #3298dc;
+            outline-offset: 2px;
+        }
     </style>
 </head>
 
