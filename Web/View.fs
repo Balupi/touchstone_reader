@@ -452,6 +452,36 @@ let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show
         }
     }
 
+/// On/off switch for Savitzky-Golay smoothing of the Group Delay curves
+/// (both Absolute and Δ from mean — group delay is a numerical derivative
+/// of phase, which amplifies whatever measurement noise is already in the
+/// raw data). Off by default: shows the real measured data unless asked
+/// otherwise.
+let private smoothGroupDelayToggle (dispatch: Dispatch<Message>) (smooth: bool) =
+    div {
+        attr.``class`` "field is-grouped is-align-items-center mb-3"
+
+        p {
+            attr.``class`` "mr-2 has-text-grey"
+            "Smoothing:"
+        }
+
+        label {
+            attr.``class`` "switch"
+
+            input {
+                attr.``type`` "checkbox"
+                attr.``checked`` smooth
+                on.click (fun _ -> dispatch (SetSmoothGroupDelay(not smooth)))
+            }
+
+            span {
+                attr.``class`` "switch-track"
+                span { attr.``class`` "switch-thumb" }
+            }
+        }
+    }
+
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
         attr.``class`` "container mt-5 px-4"
@@ -618,6 +648,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 (concat {
                                     groupDelayModeToggle dispatch model.GroupDelayMode comparableCount
                                     extremaToggle dispatch GroupDelayChart model.ShowGroupDelayExtrema
+                                    smoothGroupDelayToggle dispatch model.SmoothGroupDelay
                                 })
                                 ""
                                 "chart-group-delay"

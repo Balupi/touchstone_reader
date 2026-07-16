@@ -100,6 +100,7 @@ type App() =
                     let gdMode = currentModel.GroupDelayMode
                     let showMagExtrema = currentModel.ShowMagnitudeExtrema
                     let showGdExtrema = currentModel.ShowGroupDelayExtrema
+                    let smoothGd = currentModel.SmoothGroupDelay
 
                     Some
                         {| Ok = ok
@@ -110,10 +111,11 @@ type App() =
                            GdMode = gdMode
                            ShowMagExtrema = showMagExtrema
                            ShowGdExtrema = showGdExtrema
+                           SmoothGd = smoothGd
                            MagKey = keyOf magSelected + "##" + string showMagExtrema
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
-                           GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema |}
+                           GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema + "##" + string smoothGd |}
 
             if not isRendering then
                 match pendingWork () with
@@ -185,8 +187,9 @@ type App() =
                         if needsGroupDelay then
                             let result =
                                 match w.GdMode with
-                                | Absolute -> groupDelayChartMulti w.ShowGdExtrema w.GdSelected w.Ok
-                                | DeviationFromMean -> groupDelayDeviationChartMulti w.ShowGdExtrema w.GdSelected w.Ok
+                                | Absolute -> groupDelayChartMulti w.ShowGdExtrema w.SmoothGd w.GdSelected w.Ok
+                                | DeviationFromMean ->
+                                    groupDelayDeviationChartMulti w.ShowGdExtrema w.SmoothGd w.GdSelected w.Ok
 
                             match result with
                             | Some result -> do! render "chart-group-delay" result

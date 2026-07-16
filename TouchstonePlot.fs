@@ -494,9 +494,40 @@ let private rawGroupDelay (i: int) (j: int) (data: TouchstoneFile) =
 
     delayNs
 
-let private groupDelayTrace (label: string) (i: int) (j: int) (data: TouchstoneFile) =
+/// Savitzky-Golay smoothing, window=7 / quadratic fit, fixed coefficients
+/// (the standard published table, e.g. Numerical Recipes §14.9 — verified
+/// against a pure quadratic input for exactness, a single-spike input for
+/// correct spreading instead of a no-op, and a noisy linear trend for
+/// actual noise reduction, before trusting them here). Group delay is a
+/// numerical derivative of phase, which amplifies whatever measurement
+/// noise is already in the raw phase data — this optionally smooths that
+/// back down. The 3 points at each end don't have a full window and are
+/// left as-is; negligible for the thousand-plus-point sweeps this is for.
+let private savitzkyGolayCoeffs = [| -2.0; 3.0; 6.0; 7.0; 6.0; 3.0; -2.0 |]
+let private savitzkyGolayNorm = Array.sum savitzkyGolayCoeffs
+
+let private smoothed (ys: float[]) =
+    let half = savitzkyGolayCoeffs.Length / 2
+
+    Array.init ys.Length (fun k ->
+        if k < half || k >= ys.Length - half then
+            ys.[k]
+        else
+            let mutable acc = 0.0
+
+            for m in 0 .. savitzkyGolayCoeffs.Length - 1 do
+                acc <- acc + savitzkyGolayCoeffs.[m] * ys.[k - half + m]
+
+            acc / savitzkyGolayNorm)
+
+/// `smooth i j data` = rawGroupDelay, optionally Savitzky-Golay smoothed.
+let private groupDelaySeries (smooth: bool) (i: int) (j: int) (data: TouchstoneFile) =
+    let raw = rawGroupDelay i j data
+    if smooth then smoothed raw else raw
+
+let private groupDelayTrace (smooth: bool) (label: string) (i: int) (j: int) (data: TouchstoneFile) =
     let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-    let delayNs = rawGroupDelay i j data
+    let delayNs = groupDelaySeries smooth i j data
     let points = Array.zip freqGHz delayNs |> lttb maxPointsPerTrace
     let name = sprintf "%A%d%d" data.Option.Parameter i j
     let name = if label = "" then name else sprintf "%s %s" label name
@@ -528,8 +559,10 @@ let private interpAt (xs: float[]) (ys: float[]) (x: float) =
 /// One (trace, (label, freqGHz, deviation)) pair per file of Sij's group
 /// delay deviation (ns) from the pointwise mean across all of `files`. Files
 /// on a different frequency grid than the first are linearly interpolated
-/// onto it before averaging.
-let private groupDelayDeviationSeriesAndTraces (i: int) (j: int) (files: (string * TouchstoneFile) list) =
+/// onto it before averaging. Smoothing (if on) happens on each file's own
+/// native grid, before interpolation — smooths the measurement itself
+/// rather than an already-resampled version of it.
+let private groupDelayDeviationSeriesAndTraces (smooth: bool) (i: int) (j: int) (files: (string * TouchstoneFile) list) =
     match files with
     | [] -> [], []
     | (_, refData) :: _ ->
@@ -538,7 +571,7 @@ let private groupDelayDeviationSeriesAndTraces (i: int) (j: int) (files: (string
 
         let interpolated =
             files
-            |> List.map (fun (label, data) -> label, data, refFreqs |> Array.map (interpAt data.Frequencies (rawGroupDelay i j data)))
+            |> List.map (fun (label, data) -> label, data, refFreqs |> Array.map (interpAt data.Frequencies (groupDelaySeries smooth i j data)))
 
         let mean =
             Array.init n (fun k -> (interpolated |> List.sumBy (fun (_, _, ys) -> ys.[k])) / float interpolated.Length)
@@ -562,9 +595,16 @@ let groupDelayOrder = [ (2, 1); (1, 2) ]
 /// Group delay (ns) of the selected transmission parameters (e.g.
 /// `[ (2,1); (1,2) ]` for S21+S12, or the Y/Z/... equivalents) vs frequency
 /// (GHz), overlaid across labeled 2-port files, optionally annotated with
-/// the global min/max across all of them. Returns None if `selected` is
-/// empty or none of the files are 2-port.
-let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+/// the global min/max across all of them and optionally Savitzky-Golay
+/// smoothed (group delay is a numerical derivative of phase, which
+/// amplifies whatever measurement noise is already there). Returns None if
+/// `selected` is empty or none of the files are 2-port.
+let groupDelayChartMulti
+    (showExtrema: bool)
+    (smooth: bool)
+    (selected: (int * int) list)
+    (files: (string * TouchstoneFile) list)
+    =
     if selected.IsEmpty then
         None
     else
@@ -577,13 +617,13 @@ let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files
                 [ for (i, j) in selected do
                     for (label, data) in files2p ->
                         let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-                        (sprintf "%s S%d%d" label i j).Trim(), freqGHz, rawGroupDelay i j data ]
+                        (sprintf "%s S%d%d" label i j).Trim(), freqGHz, groupDelaySeries smooth i j data ]
 
             let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []
 
             let chart =
                 files2p
-                |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace label i j data))
+                |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace smooth label i j data))
                 |> Chart.combine
                 |> Chart.withTitle "Group Delay (ns)"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
@@ -600,7 +640,12 @@ let groupDelayChartMulti (showExtrema: bool) (selected: (int * int) list) (files
 /// first file's grid before averaging. Optionally annotated with the global
 /// min/max deviation. Returns None if `selected` is empty or fewer than two
 /// files are 2-port (a single file's deviation from itself is always zero).
-let groupDelayDeviationChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+let groupDelayDeviationChartMulti
+    (showExtrema: bool)
+    (smooth: bool)
+    (selected: (int * int) list)
+    (files: (string * TouchstoneFile) list)
+    =
     if selected.IsEmpty then
         None
     else
@@ -609,7 +654,7 @@ let groupDelayDeviationChartMulti (showExtrema: bool) (selected: (int * int) lis
         if files2p.Length < 2 then
             None
         else
-            let results = selected |> List.map (fun (i, j) -> groupDelayDeviationSeriesAndTraces i j files2p)
+            let results = selected |> List.map (fun (i, j) -> groupDelayDeviationSeriesAndTraces smooth i j files2p)
             let traces = results |> List.collect fst
             let series = results |> List.collect snd
             let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []

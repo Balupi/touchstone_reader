@@ -47,6 +47,9 @@ type Model =
       GroupDelayMode: DisplayMode
       ShowMagnitudeExtrema: bool
       ShowGroupDelayExtrema: bool
+      /// Savitzky-Golay smoothing of the group delay curves (both display
+      /// modes) — off by default, since it's not the raw measured data.
+      SmoothGroupDelay: bool
       Status: string option }
 
 let initModel =
@@ -60,6 +63,7 @@ let initModel =
       GroupDelayMode = Absolute
       ShowMagnitudeExtrema = true
       ShowGroupDelayExtrema = true
+      SmoothGroupDelay = false
       Status = None }
 
 type Message =
@@ -71,6 +75,7 @@ type Message =
     /// Only meaningful for MagnitudeChart/GroupDelayChart — the other two
     /// chart kinds never show min/max markers (see TouchstonePlot.fs).
     | SetShowExtrema of chart: ChartKind * show: bool
+    | SetSmoothGroupDelay of bool
     | SetFreqRange of fileName: string * loGHz: float * hiGHz: float
     | ResetFreqRange of fileName: string
     | SetFreqRangeLinked of fileName: string * linked: bool
@@ -118,6 +123,7 @@ let update message model =
     | SetShowExtrema(MagnitudeChart, show) -> { model with ShowMagnitudeExtrema = show }
     | SetShowExtrema(GroupDelayChart, show) -> { model with ShowGroupDelayExtrema = show }
     | SetShowExtrema(_, _) -> model
+    | SetSmoothGroupDelay smooth -> { model with SmoothGroupDelay = smooth }
     | SetFreqRange(fileName, loGHz, hiGHz) ->
         let lo, hi = min loGHz hiGHz, max loGHz hiGHz
 
