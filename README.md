@@ -47,7 +47,7 @@ Each file's own collapsible "Details" holds:
 
 ### Charts
 
-Grouped into four collapsible sections (Magnitude open by default, the rest
+Grouped into five collapsible sections (Magnitude open by default, the rest
 collapsed), each with its own S-parameter toggle buttons (S11+S21 selected
 by default) scoped to what it can show:
 
@@ -63,11 +63,18 @@ by default) scoped to what it can show:
   another), and optional Savitzky-Golay smoothing — group delay is a
   numerical derivative of phase, which amplifies whatever measurement noise
   is already in the raw data.
+- **TDR Impedance (Ω)** — S11/S22 converted from the frequency domain to a
+  time-domain impedance profile via inverse FFT: extrapolated flat down to
+  DC, resampled onto a uniform grid, tapered with a Kaiser window (unity at
+  DC so the reconstructed step response holds its true plateau, tapering off
+  only toward the high-frequency end where the hard measurement-bandwidth
+  cutoff actually causes ringing), then converted from reflection
+  coefficient to impedance via `Z(t) = Z0·(1+ρ(t))/(1-ρ(t))`.
 
-Magnitude and Group Delay can each show a min/max reference line (with the
-value labeled at the axis) for the global extreme across every loaded file,
-toggled independently per section. Every chart's legend shows one entry per
-file (not one per parameter); every chart has a CSV-export button
+Magnitude, Group Delay, and TDR can each show a min/max reference line (with
+the value labeled at the axis) for the global extreme across every loaded
+file, toggled independently per section. Every chart's legend shows one
+entry per file (not one per parameter); every chart has a CSV-export button
 (full-precision, not the downsampled display data) next to its parameter
 toggles, in addition to the same option in Plotly's own toolbar.
 

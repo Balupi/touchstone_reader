@@ -200,6 +200,30 @@ A few concepts that came up and are worth being comfortable with, not just patte
   do the numbers look plausible" glance would not have. Ended up hand-rolling the well-known window=7
   quadratic coefficient table instead (see `smoothed` in `TouchstonePlot.fs`) rather than trust an
   unverified small community package.
+- **Windowing a one-sided, DC-anchored spectrum needs a DC-preserving taper, not a textbook symmetric
+  window.** TDR's impedance step response (`tdrImpedance` in `TouchstonePlot.fs`) first came out wrong —
+  collapsing back to 0 right after the transient instead of holding at the true plateau — because a
+  plain Hann window (zero at *both* ends by construction) zeroed the spectrum's DC bin, and DC content is
+  exactly what a step response's plateau height is carried by. The ringing this kind of window is meant
+  to suppress actually comes from the hard cutoff at the *high*-frequency end (fMax), not from DC, so the
+  fix is a taper that's unity at DC and only descends toward Nyquist — see `kaiserTaper`, the
+  DC-preserving outward half of a symmetric Kaiser window (tunable ringing-vs-rise-time tradeoff via
+  β, fixed at 6 here). Diagnosed by bisecting the pipeline stage-by-stage against a synthetic 50Ω→75Ω
+  step at a known delay until windowed vs. unwindowed runs disagreed — the same "validate with synthetic
+  ground truth" discipline as the Savitzky-Golay case above, just applied to a whole pipeline instead of
+  one function.
+- **FFT time-domain resolution in this kind of "lowpass equivalent" reconstruction is fixed by the
+  highest frequency in the spectrum, not by the FFT length.** In `tdrImpedance`, `dt = 1/(2·fMax)`
+  algebraically regardless of `nFft` — increasing `nFft` only extends how far out in time the result
+  goes (more room before wraparound aliasing), it does not sharpen the step edge. Reach for more
+  *measured* bandwidth (higher fMax), not a bigger FFT, if finer time resolution is ever needed.
+- **lttb downsampling is a per-chart judgment call, not something to apply uniformly to every trace.**
+  It was already skipped for small first-class datasets before, but got added by default to a new TDR
+  chart out of habit — worth reconsidering, since TDR's native point count (2048, fixed by the FFT
+  length) is nowhere near the thousands-of-points regime lttb exists for. Downsampling a chart whose
+  whole point is being zoomed into (to see a step's sharpness/ringing) is actively counterproductive:
+  lttb picks points by whole-curve significance, so a zoomed-in view shows the straight lines between
+  *those* points, not a locally accurate curve — it looks jagged exactly where users look closest.
 
 ---
 
