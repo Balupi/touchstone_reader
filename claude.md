@@ -66,6 +66,17 @@ else entirely.
 - **Reserved-word attributes need double-backtick escaping** in Bolero's `attr` module — e.g. the
   `type`, `class`, and `open` attributes, since those are F# keywords.
 
+## Plotly.NET / Plotly.js notes
+
+- **A subplot grid's *shape* and its *size* are independent settings** — `Chart.Grid(rows, cols)`
+  controls how many subplots exist and must match the actual number of traces/subplots given to it;
+  `Chart.withSize(width, height)` controls how much total space the figure gets, and doesn't have to
+  scale with `rows`/`cols`. Fixing the size at the *maximum* possible grid footprint while letting
+  `Chart.Grid`'s row/column counts still track the current (possibly smaller) selection means whatever
+  *is* selected stretches to fill that fixed space, instead of the whole figure shrinking every time
+  something's deselected. See `quadMulti` in `TouchstonePlot.fs` — always sized for the full 2×2 quad
+  regardless of how many of the (up to 4) parameters are actually selected.
+
 ## Performance
 
 - Blazor WASM runs **interpreted by default** (no AOT) — .NET IL is executed instruction-by-instruction
@@ -145,6 +156,13 @@ A few concepts that came up and are worth being comfortable with, not just patte
 - **The Blazor stale-DOM-value diffing bug** above — this class of bug (rendered value unchanged, but
   live DOM changed by the user) will resurface in any Blazor project with typed/transformed input;
   recognizing it fast saves real debugging time.
+- **Opt-out group-sync pattern**: when several items can be optionally kept in sync (here, each file's
+  frequency-range slider — see `LoadedFile.FreqRangeLinked` / `SetFreqRange` in `State.fs`), a single
+  global "linked" flag forces all-or-nothing. A per-item bool instead, combined with a small rule —
+  *"always update the edited item itself; also update every other item if **both** the edited item and
+  that other item are flagged as linked"* — lets any item opt out individually without a bigger
+  architecture change. Compact enough to reach for whenever "sync some things, but not necessarily all
+  of them" comes up again.
 
 ---
 
