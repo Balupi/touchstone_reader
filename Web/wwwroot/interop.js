@@ -59,12 +59,19 @@ window.touchstoneInterop = {
         // (and doubly so once the container gets narrow). A horizontal
         // legend below the plot area uses the width freed up by autosize
         // above instead of competing with the chart for it.
+        //
+        // groupclick: 'togglegroup' pairs with renderChart's
+        // _dedupeLegendByFile — each file's several per-parameter traces
+        // share one legendgroup, so clicking that file's single legend
+        // entry hides/shows all of them together instead of just the one
+        // representative trace the entry happens to be attached to.
         layout.legend = Object.assign({}, layout.legend, {
             orientation: 'h',
             yanchor: 'top',
             y: -0.12,
             xanchor: 'center',
             x: 0.5,
+            groupclick: 'togglegroup',
         })
         return layout
     },
@@ -141,17 +148,81 @@ window.touchstoneInterop = {
     // Trace names are built in TouchstonePlot.fs as "<filename> <Param><i><j>"
     // (e.g. "deviceA.s2p S11") — strips that known "<Letter><digits>" suffix
     // to recover the filename, which is otherwise not attached to the trace
-    // in any dedicated field.
-    _fileDashFor: function (traceName) {
-        if (!traceName) return 'solid';
+    // in any dedicated field. Falls back to the whole name unchanged if it
+    // doesn't match (e.g. a name _dedupeLegendByFile already shortened to
+    // just the filename) — same resulting label either way.
+    _fileLabelFor: function (traceName) {
+        if (!traceName) return '';
         const match = traceName.match(/^(.*)\s[A-Za-z]\d+$/);
-        const label = match ? match[1] : traceName;
+        return match ? match[1] : traceName;
+    },
+
+    _fileDashFor: function (traceName) {
+        const label = window.touchstoneInterop._fileLabelFor(traceName);
+        if (!label) return 'solid';
         let h = 0;
         for (let i = 0; i < label.length; i++) {
             h = (h * 31 + label.charCodeAt(i)) | 0;
         }
         const cycle = window.touchstoneInterop._dashCycle;
         return cycle[((h % cycle.length) + cycle.length) % cycle.length];
+    },
+
+    // Collapses each file's several per-parameter traces (e.g. "deviceA.s2p
+    // S11", "deviceA.s2p S21", ...) down to one legend entry showing just
+    // the filename — the individual parameters already have their own
+    // axis/subplot label (S11, S21, ...), so repeating the filename once
+    // per parameter in the legend is just clutter. Traces with
+    // showlegend === false (Smith chart's background grid lines) are left
+    // alone. Paired with layout.legend.groupclick: 'togglegroup' above.
+    _dedupeLegendByFile: function (data) {
+        const seenFiles = new Set();
+        return data.map((trace) => {
+            if (trace.showlegend === false || !trace.name) return trace;
+            const label = window.touchstoneInterop._fileLabelFor(trace.name);
+            const isFirst = !seenFiles.has(label);
+            seenFiles.add(label);
+            return Object.assign({}, trace, {
+                legendgroup: label,
+                showlegend: isFirst,
+                name: isFirst ? label : trace.name,
+            });
+        });
+    },
+
+    // Filenames currently hidden via their file-list color swatch (see
+    // colorSwatch in View.fs / the swatch-toggle binding below) — re-applied
+    // on every renderChart so the hidden state survives a chart re-render
+    // (e.g. toggling a parameter), which would otherwise reset every
+    // trace's visibility back to shown.
+    _hiddenFiles: new Set(),
+
+    _applyHiddenFiles: function (data) {
+        return data.map((trace) => {
+            const label = window.touchstoneInterop._fileLabelFor(trace.name);
+            if (label && window.touchstoneInterop._hiddenFiles.has(label)) {
+                return Object.assign({}, trace, { visible: 'legendonly' });
+            }
+            return trace;
+        });
+    },
+
+    // Hides/shows every trace for `fileName` in every currently-rendered
+    // chart at once (a file's traces are spread across up to 4 separate
+    // figures — magnitude/phase/smith/group-delay). Uses the same Plotly
+    // `visible: 'legendonly'` state a click on the file's legend entry
+    // already toggles, just reachable from the file list's color swatch too.
+    _setFileVisible: function (fileName, visible) {
+        Object.keys(window.touchstoneInterop._lastFigures).forEach((divId) => {
+            const el = document.getElementById(divId);
+            if (!el || !el.data) return;
+
+            el.data.forEach((trace, idx) => {
+                if (window.touchstoneInterop._fileLabelFor(trace.name) === fileName) {
+                    Plotly.restyle(el, { visible: visible ? true : 'legendonly' }, [idx]);
+                }
+            });
+        });
     },
 
     _monochromeData: function (data) {
@@ -235,6 +306,8 @@ window.touchstoneInterop = {
         const el = document.getElementById(divId);
         if (!el) return;
         const fig = JSON.parse(figureJson);
+        fig.data = window.touchstoneInterop._dedupeLegendByFile(fig.data);
+        fig.data = window.touchstoneInterop._applyHiddenFiles(fig.data);
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.
@@ -284,6 +357,26 @@ window.touchstoneInterop = {
             btn.dataset.csvBound = 'true';
             const divId = btn.id.slice('csv-'.length);
             btn.addEventListener('click', () => window.touchstoneInterop.downloadCsv(divId));
+        });
+
+        // Wires each file list entry's color swatch; the id
+        // ("swatch-<url-encoded filename>") is set in View.fs's colorSwatch.
+        // Toggles that file's curves across every chart and fades the
+        // swatch to reflect the hidden state.
+        document.querySelectorAll('span[id^="swatch-"]').forEach((el) => {
+            if (el.dataset.toggleBound) return;
+            el.dataset.toggleBound = 'true';
+            const fileName = decodeURIComponent(el.id.slice('swatch-'.length));
+            el.addEventListener('click', () => {
+                const nowHidden = !window.touchstoneInterop._hiddenFiles.has(fileName);
+                if (nowHidden) {
+                    window.touchstoneInterop._hiddenFiles.add(fileName);
+                } else {
+                    window.touchstoneInterop._hiddenFiles.delete(fileName);
+                }
+                el.style.opacity = nowHidden ? '0.25' : '1';
+                window.touchstoneInterop._setFileVisible(fileName, !nowHidden);
+            });
         });
     }
 };

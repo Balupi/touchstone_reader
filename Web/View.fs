@@ -49,11 +49,21 @@ let private fileSummaryTags (data: TouchstoneFile) =
 /// A small filled circle in the file's plot color (see TouchstonePlot.fileColor),
 /// so the color used for a file's traces on every chart is identifiable at a
 /// glance in the file list too, without needing to check the legend.
+/// Clickable: interop.js's setupCollapsibleCharts binds a plain click
+/// handler (matched by this element's id) that hides/shows every trace for
+/// this file across every chart, fading the swatch to indicate the hidden
+/// state — the same underlying Plotly per-trace visibility toggle a click
+/// on the file's legend entry triggers, just reachable from the file list
+/// too. Pure client-side (Plotly `visible` state), not round-tripped
+/// through Elmish — same reason the CSV download button works the same way.
 let private colorSwatch (fileName: string) =
     span {
+        attr.id (sprintf "swatch-%s" (Uri.EscapeDataString fileName))
+        attr.title "Click to show/hide this file's curves"
+
         attr.style (
             sprintf
-                "display:inline-block; width:0.8em; height:0.8em; border-radius:50%%; background-color:%s; margin-right:0.5rem; flex-shrink:0;"
+                "display:inline-block; width:0.8em; height:0.8em; border-radius:50%%; background-color:%s; margin-right:0.5rem; flex-shrink:0; cursor:pointer;"
                 (fileColor fileName)
         )
     }
