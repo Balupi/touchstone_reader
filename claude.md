@@ -76,6 +76,24 @@ else entirely.
   *is* selected stretches to fill that fixed space, instead of the whole figure shrinking every time
   something's deselected. See `quadMulti` in `TouchstonePlot.fs` — always sized for the full 2×2 quad
   regardless of how many of the (up to 4) parameters are actually selected.
+- **Collapsing several traces to one legend entry**: give every trace that
+  belongs together the same `legendgroup`, set `showlegend = false` on all
+  but one representative trace per group (renamed to just the shared label,
+  e.g. the filename instead of "filename S11"), and set
+  `layout.legend.groupclick = 'togglegroup'`. Clicking that one entry then
+  hides/shows every trace in the group at once, across subplots too — not
+  just the single trace the entry happens to be attached to. Done entirely
+  as a post-processing step over the figure JSON in `interop.js`
+  (`_dedupeLegendByFile`), not in the F# chart-building code, since it only
+  needs the trace names Plotly.NET already produces.
+- **Client-side-only trace state doesn't survive `Plotly.react` with new
+  data.** Toggling a trace's `visible` via `Plotly.restyle` (e.g. a custom
+  "hide this file" button outside Plotly's own legend) only changes the
+  live chart object — the next `Plotly.react` call with freshly-serialized
+  JSON from F# has no idea that visibility choice was ever made, and resets
+  it. Re-apply any such client-only state every time new figure JSON comes
+  in, not just when the user makes the choice. See `_hiddenFiles` /
+  `_applyHiddenFiles`, applied inside `renderChart` itself in `interop.js`.
 
 ## Performance
 
@@ -126,6 +144,9 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
   (`location.href = '/?cachebust=' + Date.now()`) before trusting what's rendered.
 - Check for a stray `dotnet ... blazor-devserver.dll` process already holding the port before assuming
   `preview_start`'s "port in use" error means something else is wrong.
+- **Simulating a click on a Plotly legend entry**: a synthetic click on the visible `.legend .traces`
+  group doesn't trigger Plotly's own handler. Target the (invisible) `.legend .legendtoggle` hit-area
+  element instead — that's what Plotly actually binds the click listener to.
 - If this or a follow-up project adds Expecto: `dotnet run`, not `dotnet test`, is the right way to
   invoke it — but that's not set up anywhere in this repo yet.
 
@@ -163,6 +184,22 @@ A few concepts that came up and are worth being comfortable with, not just patte
   that other item are flagged as linked"* — lets any item opt out individually without a bigger
   architecture change. Compact enough to reach for whenever "sync some things, but not necessarily all
   of them" comes up again.
+- **Numerical differentiation amplifies whatever noise is already in the input.** Group delay is
+  `-1/(2π) · dφ/df`, a numerical derivative of measured phase — any measurement jitter gets amplified by
+  it, worse with finer frequency steps (smaller `df` divisor). This isn't a bug to chase; it's inherent
+  to differentiating real data. It gets *more visible*, not worse in absolute terms, once a shared trend
+  is subtracted out (e.g. deviation-from-mean mode) — removing the common part shrinks the y-axis range
+  the noise has to compete with. Recognize this shape (small-signal noise dominating a plot right after
+  a "subtract the mean/trend" step) before assuming the subtraction logic itself is wrong.
+- **Verify a smoothing/filter library with a spike-response test before trusting it.** The first NuGet
+  package tried for Savitzky-Golay smoothing here (SignalSharp 0.1.10) looked right on paper (MIT, pure
+  managed, clean API) but its `Apply` was silently a no-op for every interior point — a single-sample
+  spike passed straight through unchanged instead of spreading across the window. A pure quadratic
+  input (should reproduce exactly) or a single spike (should visibly spread/attenuate, not persist) are
+  cheap, fast sanity checks that would catch this class of bug immediately; a "smoothed vs. original,
+  do the numbers look plausible" glance would not have. Ended up hand-rolling the well-known window=7
+  quadratic coefficient table instead (see `smoothed` in `TouchstonePlot.fs`) rather than trust an
+  unverified small community package.
 
 ---
 

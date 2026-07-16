@@ -27,22 +27,57 @@ styling) — files are parsed in the browser and never uploaded anywhere. Drop
 several files at once to overlay them for comparison; each can be removed
 individually.
 
-Results are grouped into four collapsible sections (Magnitude open by
-default, the rest collapsed), each with its own S-parameter toggle buttons
-scoped to what it can show:
+### Files
+
+Each loaded file gets a deterministic color (hashed from its filename, so
+it's stable regardless of load order) that's used consistently for that
+file's traces across every chart, plus a matching swatch in the file list.
+Clicking a file's swatch — or its legend entry on any chart — hides that
+file's curves everywhere at once; the swatch fades to show it's hidden.
+Each file's own collapsible "Details" holds:
+
+- Port count, point count, parameter/format/reference impedance.
+- Any header comment lines (`!...`) from before the file's data starts —
+  where instrument/calibration/date info usually lives, if present.
+- A two-handle frequency-range slider (plus plain number inputs, which snap
+  to the nearest actual data point) to crop what's plotted/exported for
+  that file. A "Link range with other files" checkbox keeps several files'
+  sliders in sync — dragging one moves every other linked file's range to
+  match; unchecking it lets that one file's range move independently.
+
+### Charts
+
+Grouped into four collapsible sections (Magnitude open by default, the rest
+collapsed), each with its own S-parameter toggle buttons (S11+S21 selected
+by default) scoped to what it can show:
 
 - **Magnitude (dB)** / **Phase (deg)** — S11/S21/S12/S22, laid out as a
-  VNA-style quad grid (1–4 panels depending on the selection).
+  VNA-style quad grid. The grid's reserved footprint stays constant
+  regardless of selection, so fewer selected parameters stretch to fill it
+  instead of shrinking the page layout.
 - **Smith Chart** — S11/S22 (the reflection coefficients).
 - **Group Delay (ns)** — S21/S12 (the transmission coefficients),
-  `-1/(2π) · dφ/df` with the phase unwrapped first.
+  `-1/(2π) · dφ/df` with the phase unwrapped first. Switchable between each
+  file's absolute curve and its deviation from the pointwise mean across all
+  loaded files (useful for spotting how much units differ from one
+  another), and optional Savitzky-Golay smoothing — group delay is a
+  numerical derivative of phase, which amplifies whatever measurement noise
+  is already in the raw data.
+
+Magnitude and Group Delay can each show a min/max reference line (with the
+value labeled at the axis) for the global extreme across every loaded file,
+toggled independently per section. Every chart's legend shows one entry per
+file (not one per parameter); every chart has a CSV-export button
+(full-precision, not the downsampled display data) next to its parameter
+toggles, in addition to the same option in Plotly's own toolbar.
 
 A status line reports parsing/rendering progress, and large sweeps (into the
 thousands of points) are downsampled per trace via Largest-Triangle-Three-
 Buckets before charting, so the page stays responsive without losing narrow
 resonances or notches. Charts follow the browser's light/dark theme; the
 download button on each chart always exports a black-on-white print-style
-JPEG regardless of the on-screen theme.
+JPEG regardless of the on-screen theme, with a distinct dash pattern per
+file so they stay distinguishable once color is gone.
 
 ### Deploy to GitHub Pages
 
