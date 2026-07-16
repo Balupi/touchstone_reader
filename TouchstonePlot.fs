@@ -309,7 +309,14 @@ let private quadMulti
             |> List.map (fun (c, _, _, _) -> c)
             |> Chart.Grid(rows, cols)
             |> Chart.withTitle title
-            |> Chart.withSize (450 * cols, 350 * rows)
+            // Fixed at the full 2x2 quad's footprint regardless of how many
+            // of the (at most 4) parameters are actually selected, so
+            // toggling one off doesn't shrink the page layout — instead
+            // whatever's still selected stretches to fill that same space
+            // (e.g. one lone subplot fills the whole area instead of
+            // sitting small in a corner). Width is moot: interop.js's
+            // _makeResponsive always strips it in favor of autosize.
+            |> Chart.withSize (450 * 2, 350 * 2)
             |> Chart.withShapes shapes
             |> Chart.withAnnotations annotations
 

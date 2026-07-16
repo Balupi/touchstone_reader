@@ -47,10 +47,12 @@ type Model =
 
 let initModel =
     { Files = []
-      MagnitudeSelected = Set.ofList magnitudeQuadOrder
-      PhaseSelected = Set.ofList magnitudeQuadOrder
-      SmithSelected = Set.ofList smithOrder
-      GroupDelaySelected = Set.ofList groupDelayOrder
+      // S11 + S21 by default: the reflection/transmission pair most people
+      // check first; S12/S22 are a click away via the parameter toggles.
+      MagnitudeSelected = Set.ofList [ (1, 1); (2, 1) ]
+      PhaseSelected = Set.ofList [ (1, 1); (2, 1) ]
+      SmithSelected = Set.ofList [ (1, 1) ]
+      GroupDelaySelected = Set.ofList [ (2, 1) ]
       GroupDelayMode = Absolute
       ShowMagnitudeExtrema = true
       ShowGroupDelayExtrema = true
