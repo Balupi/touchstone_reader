@@ -31,6 +31,7 @@ type ChartKind =
     | PhaseChart
     | SmithChart
     | GroupDelayChart
+    | TdrChart
 
 /// Show each file's absolute curve, or (only meaningful with 2+ files) its
 /// deviation from the pointwise mean across the loaded files.
@@ -44,9 +45,11 @@ type Model =
       PhaseSelected: Set<int * int>
       SmithSelected: Set<int * int>
       GroupDelaySelected: Set<int * int>
+      TdrSelected: Set<int * int>
       GroupDelayMode: DisplayMode
       ShowMagnitudeExtrema: bool
       ShowGroupDelayExtrema: bool
+      ShowTdrExtrema: bool
       /// Savitzky-Golay smoothing of the group delay curves (both display
       /// modes) — off by default, since it's not the raw measured data.
       SmoothGroupDelay: bool
@@ -60,9 +63,11 @@ let initModel =
       PhaseSelected = Set.ofList [ (1, 1); (2, 1) ]
       SmithSelected = Set.ofList [ (1, 1) ]
       GroupDelaySelected = Set.ofList [ (2, 1) ]
+      TdrSelected = Set.ofList [ (1, 1) ]
       GroupDelayMode = Absolute
       ShowMagnitudeExtrema = true
       ShowGroupDelayExtrema = true
+      ShowTdrExtrema = true
       SmoothGroupDelay = false
       Status = None }
 
@@ -119,9 +124,11 @@ let update message model =
         | PhaseChart -> { model with PhaseSelected = toggle model.PhaseSelected }
         | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
         | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
+        | TdrChart -> { model with TdrSelected = toggle model.TdrSelected }
     | SetGroupDelayMode mode -> { model with GroupDelayMode = mode }
     | SetShowExtrema(MagnitudeChart, show) -> { model with ShowMagnitudeExtrema = show }
     | SetShowExtrema(GroupDelayChart, show) -> { model with ShowGroupDelayExtrema = show }
+    | SetShowExtrema(TdrChart, show) -> { model with ShowTdrExtrema = show }
     | SetShowExtrema(_, _) -> model
     | SetSmoothGroupDelay smooth -> { model with SmoothGroupDelay = smooth }
     | SetFreqRange(fileName, loGHz, hiGHz) ->

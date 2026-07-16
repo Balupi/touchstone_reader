@@ -670,6 +670,158 @@ let groupDelayDeviationChartMulti
 
             Some { Chart = chart; Csv = fun () -> toCsv "Frequency (GHz)" "Δ Group Delay (ns)" series }
 
+/// Iterative radix-2 Cooley-Tukey FFT; `input.Length` must be a power of 2.
+/// `inverse = true` computes the inverse transform, normalized by 1/n.
+let private fft (inverse: bool) (input: Complex[]) : Complex[] =
+    let n = input.Length
+    let a = Array.copy input
+    let mutable j = 0
+
+    for i in 0 .. n - 2 do
+        if i < j then
+            let tmp = a.[i]
+            a.[i] <- a.[j]
+            a.[j] <- tmp
+
+        let mutable m = n >>> 1
+        while m >= 1 && j >= m do
+            j <- j - m
+            m <- m >>> 1
+
+        j <- j + m
+
+    let sign = if inverse then 1.0 else -1.0
+    let mutable len = 2
+
+    while len <= n do
+        let ang = sign * 2.0 * Math.PI / float len
+        let wlen = Complex(cos ang, sin ang)
+        let mutable i = 0
+
+        while i < n do
+            let mutable w = Complex.One
+
+            for k in 0 .. len / 2 - 1 do
+                let u = a.[i + k]
+                let v = a.[i + k + len / 2] * w
+                a.[i + k] <- u + v
+                a.[i + k + len / 2] <- u - v
+                w <- w * wlen
+
+            i <- i + len
+
+        len <- len <<< 1
+
+    if inverse then a |> Array.map (fun c -> c / Complex(float n, 0.0)) else a
+
+/// Time (ns) and impedance (Ω) from a reflection-coefficient spectrum
+/// `gamma` sampled at `freqsHz` (ascending, need not be uniform). Classic
+/// "lowpass equivalent" TDR: extrapolates flat down to DC, resamples onto a
+/// uniform grid, windows it, builds the Hermitian-symmetric full spectrum,
+/// inverse-FFTs to an impulse response, cumulative-sums to a step response,
+/// and converts reflection coefficient to impedance via
+/// Z(t) = Z0 · (1+ρ(t)) / (1-ρ(t)).
+///
+/// The window is unity at DC and only tapers toward Nyquist/fMax — a plain
+/// symmetric Hann window (zero at *both* ends) was tried first and zeroed
+/// out the DC bin, which made every step response decay back to 0 right
+/// after the transient instead of holding at its true plateau: the hard
+/// cutoff at fMax is what causes ringing, not DC, so only that end needs
+/// tapering.
+let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
+    let fMin, fMax = freqsHz.[0], freqsHz.[freqsHz.Length - 1]
+    let dfMeasured = (fMax - fMin) / float (freqsHz.Length - 1)
+    let nFft = 4096
+    let m = nFft / 2 + 1
+    let df = fMax / float (m - 1)
+
+    let oneSided =
+        Array.init m (fun k ->
+            let f = float k * df
+            if f < fMin then
+                gamma.[0]
+            else
+                let idxF = (f - fMin) / dfMeasured
+                let lo = int (floor idxF) |> max 0 |> min (freqsHz.Length - 1)
+                let hi = min (lo + 1) (freqsHz.Length - 1)
+                let frac = idxF - float lo
+                if lo = hi then gamma.[lo] else gamma.[lo] * Complex(1.0 - frac, 0.0) + gamma.[hi] * Complex(frac, 0.0))
+
+    let windowed =
+        oneSided
+        |> Array.mapi (fun k g ->
+            let w = 0.5 * (1.0 + cos (Math.PI * float k / float (m - 1)))
+            g * Complex(w, 0.0))
+
+    let full = Array.zeroCreate<Complex> nFft
+    full.[0] <- Complex(windowed.[0].Real, 0.0)
+    for k in 1 .. m - 2 do
+        full.[k] <- windowed.[k]
+        full.[nFft - k] <- Complex.Conjugate windowed.[k]
+    full.[m - 1] <- Complex(windowed.[m - 1].Real, 0.0)
+
+    let impulse = fft true full |> Array.map (fun c -> c.Real)
+    let dt = 1.0 / (float nFft * df)
+
+    let step = Array.zeroCreate<float> nFft
+    let mutable acc = 0.0
+    for i in 0 .. nFft - 1 do
+        acc <- acc + impulse.[i]
+        step.[i] <- acc
+
+    // Only the first half of the (real, time-domain) result is meaningful
+    // resolution-wise; the rest mirrors it per the DFT's implicit periodicity.
+    let half = nFft / 2
+    let timeNs = Array.init half (fun i -> float i * dt * 1e9)
+    let impedance = step.[0 .. half - 1] |> Array.map (fun rho -> z0 * (1.0 + rho) / (1.0 - rho))
+    timeNs, impedance
+
+/// Reflection parameters selectable for TDR: S11, S22 (same pairing as the Smith chart).
+let tdrOrder = [ (1, 1); (2, 2) ]
+
+let private tdrSeriesAndTrace (label: string) (i: int) (data: TouchstoneFile) =
+    let gamma = data.Matrices |> Array.map (fun m -> m.[i, i])
+    let timeNs, impedance = tdrImpedance data.Option.R data.Frequencies gamma
+    let name = (sprintf "%s S%d%d" label i i).Trim()
+    let points = Array.zip timeNs impedance |> lttb maxPointsPerTrace
+    let trace = styledLine label name (points |> Array.map fst) (points |> Array.map snd)
+    trace, (name, timeNs, impedance)
+
+/// Time-domain impedance (Ω) from the selected reflection coefficients (e.g.
+/// `[ (1,1); (2,2) ]` for S11+S22) of several labeled S-parameter files, each
+/// converted independently via inverse FFT of its own Γ(f) — see
+/// tdrImpedance. Non-S-parameter files are ignored. Returns None if
+/// `selected` is empty or none of the files are S-parameter data.
+let tdrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+    if selected.IsEmpty then
+        None
+    else
+        let sFiles = files |> List.filter (fun (_, data) -> data.Option.Parameter = S)
+
+        if sFiles.IsEmpty then
+            None
+        else
+            let results =
+                [ for (label, data) in sFiles do
+                    for (i, j) in selected do
+                        if i = j && i <= data.Ports then
+                            tdrSeriesAndTrace label i data ]
+
+            let traces = results |> List.map fst
+            let series = results |> List.map snd
+            let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "Ω" series else [], []
+
+            let chart =
+                traces
+                |> Chart.combine
+                |> Chart.withTitle "TDR Impedance (Ω)"
+                |> Chart.withXAxisStyle "Time (ns)"
+                |> Chart.withYAxisStyle "Impedance (Ω)"
+                |> Chart.withShapes shapes
+                |> Chart.withAnnotations annotations
+
+            Some { Chart = chart; Csv = fun () -> toCsv "Time (ns)" "Impedance (Ω)" series }
+
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.
 let show (data: TouchstoneFile) =
     magnitudeChart data |> Chart.show

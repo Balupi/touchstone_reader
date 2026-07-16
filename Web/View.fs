@@ -662,6 +662,18 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 })
                                 ""
                                 "chart-group-delay"
+
+                        if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
+                            chartSection
+                                dispatch
+                                "TDR Impedance (Ω)"
+                                false
+                                TdrChart
+                                tdrOrder
+                                model.TdrSelected
+                                (extremaToggle dispatch TdrChart model.ShowTdrExtrema)
+                                ""
+                                "chart-tdr"
                     }
             }
     }

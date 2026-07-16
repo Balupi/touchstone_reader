@@ -18,6 +18,7 @@ type App() =
     let mutable lastPhaseKey: string option = None
     let mutable lastSmithKey: string option = None
     let mutable lastGroupDelayKey: string option = None
+    let mutable lastTdrKey: string option = None
     // Guards against the render triggered by our own SetStatus dispatch
     // re-entering this method (Blazor calls OnAfterRenderAsync after every
     // render) and racing to redo or prematurely clear the same work.
@@ -97,9 +98,11 @@ type App() =
                     let phaseSelected = magnitudeQuadOrder |> List.filter currentModel.PhaseSelected.Contains
                     let smithSelected = smithOrder |> List.filter currentModel.SmithSelected.Contains
                     let gdSelected = groupDelayOrder |> List.filter currentModel.GroupDelaySelected.Contains
+                    let tdrSelected = tdrOrder |> List.filter currentModel.TdrSelected.Contains
                     let gdMode = currentModel.GroupDelayMode
                     let showMagExtrema = currentModel.ShowMagnitudeExtrema
                     let showGdExtrema = currentModel.ShowGroupDelayExtrema
+                    let showTdrExtrema = currentModel.ShowTdrExtrema
                     let smoothGd = currentModel.SmoothGroupDelay
 
                     Some
@@ -108,14 +111,17 @@ type App() =
                            PhaseSelected = phaseSelected
                            SmithSelected = smithSelected
                            GdSelected = gdSelected
+                           TdrSelected = tdrSelected
                            GdMode = gdMode
                            ShowMagExtrema = showMagExtrema
                            ShowGdExtrema = showGdExtrema
+                           ShowTdrExtrema = showTdrExtrema
                            SmoothGd = smoothGd
                            MagKey = keyOf magSelected + "##" + string showMagExtrema
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
-                           GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema + "##" + string smoothGd |}
+                           GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema + "##" + string smoothGd
+                           TdrKey = keyOf tdrSelected + "##" + string showTdrExtrema |}
 
             if not isRendering then
                 match pendingWork () with
@@ -124,6 +130,7 @@ type App() =
                     lastPhaseKey <- None
                     lastSmithKey <- None
                     lastGroupDelayKey <- None
+                    lastTdrKey <- None
                     lastCsvThunks <- Map.empty
 
                     if currentModel.Status.IsSome then
@@ -133,6 +140,7 @@ type App() =
                     && lastPhaseKey = Some w.PhaseKey
                     && lastSmithKey = Some w.SmithKey
                     && lastGroupDelayKey = Some w.GdKey
+                    && lastTdrKey = Some w.TdrKey
                     ->
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
@@ -157,10 +165,12 @@ type App() =
                         let needsPhase = lastPhaseKey <> Some w.PhaseKey
                         let needsSmith = lastSmithKey <> Some w.SmithKey
                         let needsGroupDelay = lastGroupDelayKey <> Some w.GdKey
+                        let needsTdr = lastTdrKey <> Some w.TdrKey
                         lastMagnitudeKey <- Some w.MagKey
                         lastPhaseKey <- Some w.PhaseKey
                         lastSmithKey <- Some w.SmithKey
                         lastGroupDelayKey <- Some w.GdKey
+                        lastTdrKey <- Some w.TdrKey
 
                         let render (divId: string) (result: ChartResult) : Task =
                             lastCsvThunks <- lastCsvThunks |> Map.add divId result.Csv
@@ -193,6 +203,11 @@ type App() =
 
                             match result with
                             | Some result -> do! render "chart-group-delay" result
+                            | None -> ()
+
+                        if needsTdr then
+                            match tdrChartMulti w.ShowTdrExtrema w.TdrSelected w.Ok with
+                            | Some result -> do! render "chart-tdr" result
                             | None -> ()
 
                     this.Dispatch(SetStatus None)
