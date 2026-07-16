@@ -58,16 +58,17 @@ let private colorSwatch (fileName: string) =
         )
     }
 
-/// The union of every loaded (successfully parsed) file's own native
-/// frequency range — the shared slider bounds while ranges are linked, so a
-/// linked slider can reach every loaded file's full extent rather than
-/// being capped at whichever file happens to be narrowest.
+/// The union of every *linked* file's own native frequency range — the
+/// shared slider bounds for a file that's part of the linked group, so a
+/// linked slider can reach every other linked file's full extent rather
+/// than being capped at whichever one happens to be narrowest. Files that
+/// have opted out of linking don't contribute to (or use) this union.
 let private unionFreqRangeGHz (files: LoadedFile list) =
     let bounds =
         files
         |> List.choose (fun f ->
             match f.Data with
-            | Ok data when data.Frequencies.Length > 0 ->
+            | Ok data when f.FreqRangeLinked && data.Frequencies.Length > 0 ->
                 Some(data.Frequencies.[0] / 1e9, data.Frequencies.[data.Frequencies.Length - 1] / 1e9)
             | _ -> None)
 
@@ -79,13 +80,14 @@ let private unionFreqRangeGHz (files: LoadedFile list) =
 /// range inputs stacked exactly on top of each other (`.range-dual` in
 /// index.html hides each input's own track and touch-target, leaving only
 /// its thumb interactive, so the overlap doesn't block either handle from
-/// being dragged). Bounded by the file's actual sweep (or, while ranges are
-/// linked, the union of every loaded file's sweep — see unionFreqRangeGHz),
-/// defaulting to the full range. Changes commit on release (`on.change`, not
-/// `on.input`) since every change re-downsamples and re-renders every chart
-/// this file appears in — doing that on every drag tick would be janky.
-/// `update` (State.fs) clamps lo/hi so the handles can't cross, and fans a
-/// linked change out to every file.
+/// being dragged). Bounded by the file's actual sweep (or, while this file
+/// is part of the linked group, the union of every other linked file's
+/// sweep — see unionFreqRangeGHz), defaulting to the full range. Changes
+/// commit on release (`on.change`, not `on.input`) since every change
+/// re-downsamples and re-renders every chart this file appears in — doing
+/// that on every drag tick would be janky. `update` (State.fs) clamps
+/// lo/hi so the handles can't cross, and fans a linked change out to every
+/// other linked file.
 let private freqRangeSlider
     (dispatch: Dispatch<Message>)
     (fileName: string)
@@ -123,7 +125,7 @@ let private freqRangeSlider
 
                     p {
                         attr.``class`` "mr-2 is-size-7 has-text-grey"
-                        "Frequenzbereich:"
+                        "Frequency range:"
                     }
 
                     input {
@@ -170,7 +172,7 @@ let private freqRangeSlider
                         attr.``class`` "button is-white is-size-7 p-0"
                         attr.style "height: auto; border: none;"
                         on.click (fun _ -> dispatch (ResetFreqRange fileName))
-                        "Zurücksetzen"
+                        "Reset"
                     }
             }
 
@@ -206,9 +208,29 @@ let private freqRangeSlider
             }
         }
 
+/// Checked, this file's frequency-range slider is part of the linked group
+/// (see unionFreqRangeGHz / SetFreqRange in State.fs); unchecked, it moves
+/// independently. Lives right next to the slider it controls, in the same
+/// Details section, rather than a single global switch elsewhere on the
+/// page with no visible slider to explain what it's linking. Only shown
+/// once there's more than one file to actually link with.
+let private freqRangeLinkToggle (dispatch: Dispatch<Message>) (fileName: string) (linked: bool) =
+    label {
+        attr.``class`` "checkbox is-size-7 has-text-grey is-flex is-align-items-center mt-2"
+
+        input {
+            attr.``type`` "checkbox"
+            attr.``class`` "mr-2"
+            attr.``checked`` linked
+            on.click (fun _ -> dispatch (SetFreqRangeLinked(fileName, not linked)))
+        }
+
+        "Link range with other files"
+    }
+
 let private fileTag
     (dispatch: Dispatch<Message>)
-    (linked: bool)
+    (okCount: int)
     (unionRange: (float * float) option)
     (f: LoadedFile)
     =
@@ -255,7 +277,10 @@ let private fileTag
                         }
                 }
 
-                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz f.FreqRangeGen linked unionRange
+                freqRangeSlider dispatch f.FileName data f.FreqRangeGHz f.FreqRangeGen f.FreqRangeLinked unionRange
+
+                if okCount >= 2 then
+                    freqRangeLinkToggle dispatch f.FileName f.FreqRangeLinked
 
                 if not data.Comments.IsEmpty then
                     div {
@@ -408,7 +433,7 @@ let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show
 
         p {
             attr.``class`` "mr-2 has-text-grey"
-            "Min/Max-Markierungen:"
+            "Min/max markers:"
         }
 
         label {
@@ -425,24 +450,6 @@ let private extremaToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (show
                 span { attr.``class`` "switch-thumb" }
             }
         }
-    }
-
-/// Checked, dragging any one file's frequency-range slider moves every
-/// file's slider along with it (to the same GHz bounds); unchecked, each
-/// slider moves independently. Only shown once there's more than one file
-/// to actually link. Default checked (State.fs's initModel).
-let private linkFreqRangesToggle (dispatch: Dispatch<Message>) (linked: bool) =
-    label {
-        attr.``class`` "checkbox is-size-7 has-text-grey mb-2 is-flex is-align-items-center"
-
-        input {
-            attr.``type`` "checkbox"
-            attr.``class`` "mr-2"
-            attr.``checked`` linked
-            on.click (fun _ -> dispatch (SetLinkFreqRanges(not linked)))
-        }
-
-        "Frequenzbereich-Slider aller Dateien verknüpfen"
     }
 
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
@@ -551,14 +558,10 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                 }
 
                 let okCount = model.Files |> List.filter (fun f -> match f.Data with Ok _ -> true | Error _ -> false) |> List.length
-
-                if okCount >= 2 then
-                    linkFreqRangesToggle dispatch model.LinkFreqRanges
-
                 let unionRange = unionFreqRangeGHz model.Files
 
                 for f in model.Files do
-                    fileTag dispatch model.LinkFreqRanges unionRange f
+                    fileTag dispatch okCount unionRange f
 
                 let ok = okFiles model
                 let has2Port = ok |> List.exists (fun (_, data) -> data.Ports = 2)

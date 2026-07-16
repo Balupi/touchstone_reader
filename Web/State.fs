@@ -16,7 +16,14 @@ type LoadedFile =
       /// snaps to the number already shown — its normal diffing skips that,
       /// since from its perspective the rendered value didn't change even
       /// though the live DOM (what the user actually typed) did.
-      FreqRangeGen: int }
+      FreqRangeGen: int
+      /// Whether this file's frequency-range slider is part of the linked
+      /// group: editing any linked file's slider applies the same GHz
+      /// bounds to every other linked file. Unchecking it (in that file's
+      /// own Details section, next to its slider) takes just that one file
+      /// out of the group without affecting the rest. Default true, so
+      /// multiple files start out synced.
+      FreqRangeLinked: bool }
 
 /// Which collapsible section a ToggleParam message applies to.
 type ChartKind =
@@ -40,9 +47,6 @@ type Model =
       GroupDelayMode: DisplayMode
       ShowMagnitudeExtrema: bool
       ShowGroupDelayExtrema: bool
-      /// When set, dragging any one file's frequency-range slider applies
-      /// the same GHz bounds to every loaded file instead of just that one.
-      LinkFreqRanges: bool
       Status: string option }
 
 let initModel =
@@ -56,7 +60,6 @@ let initModel =
       GroupDelayMode = Absolute
       ShowMagnitudeExtrema = true
       ShowGroupDelayExtrema = true
-      LinkFreqRanges = true
       Status = None }
 
 type Message =
@@ -70,7 +73,7 @@ type Message =
     | SetShowExtrema of chart: ChartKind * show: bool
     | SetFreqRange of fileName: string * loGHz: float * hiGHz: float
     | ResetFreqRange of fileName: string
-    | SetLinkFreqRanges of bool
+    | SetFreqRangeLinked of fileName: string * linked: bool
     | SetStatus of string option
 
 let update message model =
@@ -86,7 +89,8 @@ let update message model =
             { FileName = fileName
               Data = result
               FreqRangeGHz = None
-              FreqRangeGen = 0 }
+              FreqRangeGen = 0
+              FreqRangeLinked = true }
 
         let files =
             if model.Files |> List.exists (fun f -> f.FileName = fileName) then
@@ -117,8 +121,17 @@ let update message model =
     | SetFreqRange(fileName, loGHz, hiGHz) ->
         let lo, hi = min loGHz hiGHz, max loGHz hiGHz
 
+        // Edits to a linked file propagate to every other linked file, same
+        // as before; edits to a file that's opted out of the group only
+        // ever affect that one file, regardless of what the rest are doing.
+        let editedIsLinked =
+            model.Files
+            |> List.tryFind (fun f -> f.FileName = fileName)
+            |> Option.map (fun f -> f.FreqRangeLinked)
+            |> Option.defaultValue false
+
         let apply f =
-            if model.LinkFreqRanges || f.FileName = fileName then
+            if f.FileName = fileName || (editedIsLinked && f.FreqRangeLinked) then
                 { f with
                     FreqRangeGHz = Some(lo, hi)
                     FreqRangeGen = f.FreqRangeGen + 1 }
@@ -127,8 +140,14 @@ let update message model =
 
         { model with Files = model.Files |> List.map apply }
     | ResetFreqRange fileName ->
+        let editedIsLinked =
+            model.Files
+            |> List.tryFind (fun f -> f.FileName = fileName)
+            |> Option.map (fun f -> f.FreqRangeLinked)
+            |> Option.defaultValue false
+
         let apply f =
-            if model.LinkFreqRanges || f.FileName = fileName then
+            if f.FileName = fileName || (editedIsLinked && f.FreqRangeLinked) then
                 { f with
                     FreqRangeGHz = None
                     FreqRangeGen = f.FreqRangeGen + 1 }
@@ -136,7 +155,11 @@ let update message model =
                 f
 
         { model with Files = model.Files |> List.map apply }
-    | SetLinkFreqRanges linked -> { model with LinkFreqRanges = linked }
+    | SetFreqRangeLinked(fileName, linked) ->
+        { model with
+            Files =
+                model.Files
+                |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeLinked = linked } else f) }
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart
