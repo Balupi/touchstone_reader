@@ -714,6 +714,34 @@ let private fft (inverse: bool) (input: Complex[]) : Complex[] =
 
     if inverse then a |> Array.map (fun c -> c / Complex(float n, 0.0)) else a
 
+/// Modified Bessel function of the first kind, order 0 — the normalizing
+/// term the Kaiser window is built from. Power series; 40 terms comfortably
+/// converges for the beta values a window like this uses (single digits).
+let private besselI0 (x: float) =
+    let halfXSq = (x / 2.0) * (x / 2.0)
+    let mutable term = 1.0
+    let mutable sum = 1.0
+
+    for k in 1 .. 40 do
+        term <- term * halfXSq / (float k * float k)
+        sum <- sum + term
+
+    sum
+
+/// Kaiser-window taper for tdrImpedance's one-sided spectrum: unity at k=0
+/// (DC) and descending toward 0 as k -> m-1 (Nyquist/fMax), taken as the
+/// outward-facing half of a symmetric Kaiser window centered at DC. β trades
+/// ringing suppression near the TDR step against rise-time/edge sharpness —
+/// higher β = quieter ringing but a softer, slower-rising step. Fixed at 6
+/// (no UI control): a moderate choice, noticeably quieter than the raised-
+/// cosine taper it replaces without visibly blunting the step.
+let private kaiserBeta = 6.0
+let private kaiserI0Beta = besselI0 kaiserBeta
+
+let private kaiserTaper (m: int) (k: int) =
+    let ratio = float k / float (m - 1)
+    besselI0 (kaiserBeta * sqrt (max 0.0 (1.0 - ratio * ratio))) / kaiserI0Beta
+
 /// Time (ns) and impedance (Ω) from a reflection-coefficient spectrum
 /// `gamma` sampled at `freqsHz` (ascending, need not be uniform). Classic
 /// "lowpass equivalent" TDR: extrapolates flat down to DC, resamples onto a
@@ -727,7 +755,7 @@ let private fft (inverse: bool) (input: Complex[]) : Complex[] =
 /// out the DC bin, which made every step response decay back to 0 right
 /// after the transient instead of holding at its true plateau: the hard
 /// cutoff at fMax is what causes ringing, not DC, so only that end needs
-/// tapering.
+/// tapering. See kaiserTaper for the taper shape itself.
 let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
     let fMin, fMax = freqsHz.[0], freqsHz.[freqsHz.Length - 1]
     let dfMeasured = (fMax - fMin) / float (freqsHz.Length - 1)
@@ -747,11 +775,7 @@ let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
                 let frac = idxF - float lo
                 if lo = hi then gamma.[lo] else gamma.[lo] * Complex(1.0 - frac, 0.0) + gamma.[hi] * Complex(frac, 0.0))
 
-    let windowed =
-        oneSided
-        |> Array.mapi (fun k g ->
-            let w = 0.5 * (1.0 + cos (Math.PI * float k / float (m - 1)))
-            g * Complex(w, 0.0))
+    let windowed = oneSided |> Array.mapi (fun k g -> g * Complex(kaiserTaper m k, 0.0))
 
     let full = Array.zeroCreate<Complex> nFft
     full.[0] <- Complex(windowed.[0].Real, 0.0)
@@ -779,12 +803,17 @@ let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
 /// Reflection parameters selectable for TDR: S11, S22 (same pairing as the Smith chart).
 let tdrOrder = [ (1, 1); (2, 2) ]
 
+/// Not lttb-downsampled unlike the other *Trace helpers: the native point
+/// count here is fixed at half of tdrImpedance's nFft (2048), not the
+/// thousands-of-points a real VNA sweep can have, so it's well within
+/// Plotly's comfort zone already. lttb picks points by global significance
+/// (e.g. the step edge), which looks jagged once zoomed into a region it
+/// didn't optimize for — this chart is exactly the one people zoom into.
 let private tdrSeriesAndTrace (label: string) (i: int) (data: TouchstoneFile) =
     let gamma = data.Matrices |> Array.map (fun m -> m.[i, i])
     let timeNs, impedance = tdrImpedance data.Option.R data.Frequencies gamma
     let name = (sprintf "%s S%d%d" label i i).Trim()
-    let points = Array.zip timeNs impedance |> lttb maxPointsPerTrace
-    let trace = styledLine label name (points |> Array.map fst) (points |> Array.map snd)
+    let trace = styledLine label name timeNs impedance
     trace, (name, timeNs, impedance)
 
 /// Time-domain impedance (Ω) from the selected reflection coefficients (e.g.
