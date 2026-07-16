@@ -54,6 +54,18 @@ window.touchstoneInterop = {
         // truncated to 15 chars by default, which cuts off exactly the part
         // that distinguishes files — disable that.
         layout.hoverlabel = Object.assign({}, layout.hoverlabel, { namelength: -1 })
+        // Plotly's default legend sits to the right of the plot, eating
+        // into width that's already tight in the magnitude/phase quad grid
+        // (and doubly so once the container gets narrow). A horizontal
+        // legend below the plot area uses the width freed up by autosize
+        // above instead of competing with the chart for it.
+        layout.legend = Object.assign({}, layout.legend, {
+            orientation: 'h',
+            yanchor: 'top',
+            y: -0.12,
+            xanchor: 'center',
+            x: 0.5,
+        })
         return layout
     },
 
