@@ -890,6 +890,13 @@ let tdrOrder = [ (1, 1); (2, 2) ]
 /// the new position back into SetTdrGate. Always emitted in [lo; hi] order,
 /// so the web UI can identify which shape is which by position alone.
 /// Empty when `gateNs` is None.
+///
+/// Line width is 6, not a hairline: Plotly's shape-drag hit area is tied
+/// directly to the rendered stroke width (`pointer-events: stroke`), so a
+/// thin line needs the pointer within 1-2px of it or the click falls
+/// through to the plot's own box-zoom drag underneath instead — width 6
+/// gives it a comfortably grabbable target. Dash (not Dot) at this width,
+/// since dots that size read as chunky blobs rather than a guide line.
 let private gateBoundaryShapes (gateNs: (float * float) option) =
     match gateNs with
     | None -> []
@@ -904,7 +911,7 @@ let private gateBoundaryShapes (gateNs: (float * float) option) =
                 Xref = "x",
                 Yref = "paper",
                 Editable = true,
-                Line = Line.init (Color = Color.fromString "#999999", Dash = StyleParam.DrawingStyle.Dot, Width = 1.5)
+                Line = Line.init (Color = Color.fromString "#999999", Dash = StyleParam.DrawingStyle.Dash, Width = 6.0)
             )
 
         [ vline lo; vline hi ]
