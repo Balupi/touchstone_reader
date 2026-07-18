@@ -46,16 +46,7 @@ window.touchstoneInterop = {
     // Magnitude/Phase/Group Delay — but not the Smith chart, whose x-axis is
     // Re(Γ) rather than frequency and reads better with normal per-point hover.
     _makeResponsive: function (layout) {
-        // Plotly.react rebuilds the figure from scratch on every re-render
-        // (a parameter toggle, dragging the TDR gate, ...) and resets
-        // zoom/pan back to autorange unless told otherwise — uirevision
-        // staying the *same* string across successive renders of the same
-        // div is Plotly's own mechanism for "this is a live update to the
-        // same chart, preserve whatever the user zoomed/panned to," not
-        // "this is a brand new chart." Any fixed value works; it only needs
-        // to stay stable across a given div's own renders, not be unique
-        // per chart.
-        layout = Object.assign({}, layout, { autosize: true, uirevision: 'keep-zoom' })
+        layout = Object.assign({}, layout, { autosize: true })
         delete layout.width
         const isSmith = layout.xaxis && layout.xaxis.title && layout.xaxis.title.text === 'Re(Γ)'
         if (!isSmith) layout.hovermode = 'x unified'
@@ -416,6 +407,34 @@ window.touchstoneInterop = {
         fig.data = window.touchstoneInterop._applyHiddenFiles(fig.data);
         if (divId === 'chart-tdr' || divId === 'chart-tdr-gated') {
             fig.data = window.touchstoneInterop._applyTdrHiddenFiles(fig.data);
+        }
+        // Explicitly carries the currently-displayed zoom/pan (if any) over
+        // onto the fresh layout, for every axis (xaxis, xaxis2, yaxis2, ...
+        // — a subplot grid has more than one). Deliberately not done via
+        // layout.uirevision (Plotly's own built-in "preserve what the user
+        // interactively changed" mechanism) — tried that first, but it
+        // preserves *every* interactive change under one revision, not just
+        // axis ranges: it also froze the TDR gate's guide-line shapes at
+        // whatever Y position a live drag gesture last left them at (see
+        // gateBoundaryShapes in TouchstonePlot.fs — Y0/Y1 are always meant
+        // to snap back to 0/1, full plot height, every render), since
+        // editable shape positions ride on the same revision as axis
+        // ranges. Copying just the axis range by hand avoids that. Reads
+        // from el._fullLayout (Plotly's own resolved current state), not
+        // el.layout (the raw, possibly-still-autorange figure as last given
+        // to it), since that's what reflects an actual interactive zoom/pan.
+        if (el._fullLayout) {
+            Object.keys(el._fullLayout)
+                .filter((k) => /^(xaxis|yaxis)\d*$/.test(k))
+                .forEach((k) => {
+                    const current = el._fullLayout[k];
+                    if (current && current.autorange === false && current.range) {
+                        fig.layout[k] = Object.assign({}, fig.layout[k], {
+                            range: current.range.slice(),
+                            autorange: false,
+                        });
+                    }
+                });
         }
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
