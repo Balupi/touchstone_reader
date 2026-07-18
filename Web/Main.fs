@@ -19,6 +19,7 @@ type App() =
     let mutable lastSmithKey: string option = None
     let mutable lastGroupDelayKey: string option = None
     let mutable lastTdrKey: string option = None
+    let mutable lastTdrGatedKey: string option = None
     // Guards against the render triggered by our own SetStatus dispatch
     // re-entering this method (Blazor calls OnAfterRenderAsync after every
     // render) and racing to redo or prematurely clear the same work.
@@ -104,6 +105,7 @@ type App() =
                     let showGdExtrema = currentModel.ShowGroupDelayExtrema
                     let showTdrExtrema = currentModel.ShowTdrExtrema
                     let smoothGd = currentModel.SmoothGroupDelay
+                    let tdrGateNs = currentModel.TdrGateNs
 
                     Some
                         {| Ok = ok
@@ -117,11 +119,13 @@ type App() =
                            ShowGdExtrema = showGdExtrema
                            ShowTdrExtrema = showTdrExtrema
                            SmoothGd = smoothGd
+                           TdrGateNs = tdrGateNs
                            MagKey = keyOf magSelected + "##" + string showMagExtrema
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
                            GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema + "##" + string smoothGd
-                           TdrKey = keyOf tdrSelected + "##" + string showTdrExtrema |}
+                           TdrKey = keyOf tdrSelected + "##" + string showTdrExtrema + "##" + string tdrGateNs
+                           TdrGatedKey = keyOf tdrSelected + "##" + string tdrGateNs |}
 
             if not isRendering then
                 match pendingWork () with
@@ -131,6 +135,7 @@ type App() =
                     lastSmithKey <- None
                     lastGroupDelayKey <- None
                     lastTdrKey <- None
+                    lastTdrGatedKey <- None
                     lastCsvThunks <- Map.empty
 
                     if currentModel.Status.IsSome then
@@ -141,6 +146,7 @@ type App() =
                     && lastSmithKey = Some w.SmithKey
                     && lastGroupDelayKey = Some w.GdKey
                     && lastTdrKey = Some w.TdrKey
+                    && lastTdrGatedKey = Some w.TdrGatedKey
                     ->
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
@@ -166,11 +172,13 @@ type App() =
                         let needsSmith = lastSmithKey <> Some w.SmithKey
                         let needsGroupDelay = lastGroupDelayKey <> Some w.GdKey
                         let needsTdr = lastTdrKey <> Some w.TdrKey
+                        let needsTdrGated = lastTdrGatedKey <> Some w.TdrGatedKey
                         lastMagnitudeKey <- Some w.MagKey
                         lastPhaseKey <- Some w.PhaseKey
                         lastSmithKey <- Some w.SmithKey
                         lastGroupDelayKey <- Some w.GdKey
                         lastTdrKey <- Some w.TdrKey
+                        lastTdrGatedKey <- Some w.TdrGatedKey
 
                         let render (divId: string) (result: ChartResult) : Task =
                             lastCsvThunks <- lastCsvThunks |> Map.add divId result.Csv
@@ -206,8 +214,13 @@ type App() =
                             | None -> ()
 
                         if needsTdr then
-                            match tdrChartMulti w.ShowTdrExtrema w.TdrSelected w.Ok with
+                            match tdrChartMulti w.ShowTdrExtrema w.TdrGateNs w.TdrSelected w.Ok with
                             | Some result -> do! render "chart-tdr" result
+                            | None -> ()
+
+                        if needsTdrGated then
+                            match tdrGatedChartMulti w.TdrGateNs w.TdrSelected w.Ok with
+                            | Some result -> do! render "chart-tdr-gated" result
                             | None -> ()
 
                     this.Dispatch(SetStatus None)

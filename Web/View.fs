@@ -32,6 +32,9 @@ let private formatInvariant (v: float) = v.ToString(CultureInfo.InvariantCulture
 /// typed value and the number it's echoed back as always agree.
 let private formatGHz (v: float) = formatInvariant (Math.Round(v, 3))
 
+/// Same rounding as formatGHz, for the TDR gate UI's ns values.
+let private formatNs (v: float) = formatInvariant (Math.Round(v, 3))
+
 /// The actual data point (Hz, converted to GHz) closest to `targetGHz` —
 /// used so typing a frequency-range bound snaps to a real, plottable point
 /// on that file's sweep instead of an arbitrary value nothing lives at.
@@ -492,6 +495,117 @@ let private smoothGroupDelayToggle (dispatch: Dispatch<Message>) (smooth: bool) 
         }
     }
 
+/// Global time-gate control for the TDR section: a two-handle ns slider
+/// (same visual pattern as freqRangeSlider, minus per-file linking — there's
+/// only one gate, shared across every loaded file) plus number inputs and a
+/// Reset button once a gate is set. Bounded by `maxNs` (the largest native
+/// TDR time span across the loaded S-parameter files — see tdrFullSpanNs);
+/// the default [0, maxNs] range is what tdrGatedChartMulti treats as "no
+/// gating". Drawn as guide lines on the TDR Impedance chart (see
+/// gateBoundaryShapes in TouchstonePlot.fs) so the gate can be calibrated
+/// against the actual step response.
+let private tdrGateSlider (dispatch: Dispatch<Message>) (gateNs: (float * float) option) (gen: int) (maxNs: float) =
+    if maxNs <= 0.0 then
+        empty ()
+    else
+        let lo, hi = defaultArg gateNs (0.0, maxNs)
+        let step = formatInvariant (maxNs / 500.0)
+        let pct v = v / maxNs * 100.0
+
+        div {
+            attr.``class`` "mb-3"
+
+            div {
+                attr.``class`` "is-flex is-align-items-center is-justify-content-space-between"
+
+                div {
+                    attr.``class`` "is-flex is-align-items-center"
+
+                    p {
+                        attr.``class`` "mr-2 has-text-grey"
+                        "Time gate:"
+                    }
+
+                    input {
+                        attr.key (sprintf "tdr-gate-lo-%d" gen)
+                        attr.``class`` "input is-small"
+                        attr.style "width: 5rem;"
+                        attr.``type`` "number"
+                        attr.step "any"
+                        attr.value (formatNs lo)
+
+                        on.change (fun e ->
+                            match tryParseInvariant e.Value with
+                            | Some typed -> dispatch (SetTdrGate(max 0.0 typed, hi))
+                            | None -> ())
+                    }
+
+                    p {
+                        attr.``class`` "mx-2 is-size-7 has-text-grey"
+                        "–"
+                    }
+
+                    input {
+                        attr.key (sprintf "tdr-gate-hi-%d" gen)
+                        attr.``class`` "input is-small"
+                        attr.style "width: 5rem;"
+                        attr.``type`` "number"
+                        attr.step "any"
+                        attr.value (formatNs hi)
+
+                        on.change (fun e ->
+                            match tryParseInvariant e.Value with
+                            | Some typed -> dispatch (SetTdrGate(lo, min maxNs typed))
+                            | None -> ())
+                    }
+
+                    p {
+                        attr.``class`` "ml-2 is-size-7 has-text-grey"
+                        "ns"
+                    }
+                }
+
+                if gateNs.IsSome then
+                    button {
+                        attr.``class`` "button is-white is-size-7 p-0"
+                        attr.style "height: auto; border: none;"
+                        on.click (fun _ -> dispatch ResetTdrGate)
+                        "Reset"
+                    }
+            }
+
+            div {
+                attr.``class`` "range-dual-wrap"
+
+                div { attr.``class`` "range-dual-track" }
+
+                div {
+                    attr.``class`` "range-dual-selected"
+                    attr.style (sprintf "left: %.3f%%; width: %.3f%%;" (pct lo) (pct hi - pct lo))
+                }
+
+                input {
+                    attr.``class`` "range-dual"
+                    attr.``type`` "range"
+                    attr.min "0"
+                    attr.max (formatInvariant maxNs)
+                    attr.step step
+                    attr.value (formatInvariant lo)
+                    on.change (fun e -> dispatch (SetTdrGate(parseInvariant e.Value, hi)))
+                }
+
+                input {
+                    attr.``class`` "range-dual"
+                    attr.``type`` "range"
+                    attr.min "0"
+                    attr.max (formatInvariant maxNs)
+                    attr.step step
+                    attr.value (formatInvariant hi)
+                    on.change (fun e -> dispatch (SetTdrGate(lo, parseInvariant e.Value)))
+                }
+            }
+        }
+
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
         attr.``class`` "container mt-5 px-4"
@@ -663,17 +777,37 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 ""
                                 "chart-group-delay"
 
-                        if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
-                            chartSection
-                                dispatch
-                                "TDR Impedance (Ω)"
-                                false
-                                TdrChart
-                                tdrOrder
-                                model.TdrSelected
-                                (extremaToggle dispatch TdrChart model.ShowTdrExtrema)
-                                ""
-                                "chart-tdr"
+                        let sFileData = ok |> List.map snd |> List.filter (fun data -> data.Option.Parameter = S)
+
+                        if not sFileData.IsEmpty then
+                            let maxGateNs = sFileData |> List.map tdrFullSpanNs |> List.max
+
+                            concat {
+                                chartSection
+                                    dispatch
+                                    "TDR Impedance (Ω)"
+                                    false
+                                    TdrChart
+                                    tdrOrder
+                                    model.TdrSelected
+                                    (concat {
+                                        extremaToggle dispatch TdrChart model.ShowTdrExtrema
+                                        tdrGateSlider dispatch model.TdrGateNs model.TdrGateGen maxGateNs
+                                    })
+                                    ""
+                                    "chart-tdr"
+
+                                chartSection
+                                    dispatch
+                                    "TDR Gated Magnitude (dB)"
+                                    false
+                                    TdrChart
+                                    tdrOrder
+                                    model.TdrSelected
+                                    (empty ())
+                                    ""
+                                    "chart-tdr-gated"
+                            }
                     }
             }
     }

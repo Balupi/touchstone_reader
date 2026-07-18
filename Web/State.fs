@@ -53,6 +53,14 @@ type Model =
       /// Savitzky-Golay smoothing of the group delay curves (both display
       /// modes) — off by default, since it's not the raw measured data.
       SmoothGroupDelay: bool
+      /// Time-gate (ns) applied to the TDR Gated Magnitude chart — None
+      /// means the full causal record, i.e. no gating (see
+      /// tdrFullSpanNs/tdrGatedChartMulti). Also drawn as guide lines on the
+      /// TDR Impedance chart, to calibrate the gate against the step.
+      TdrGateNs: (float * float) option
+      /// Bumped on every SetTdrGate/ResetTdrGate — same stale-DOM-value fix
+      /// as LoadedFile.FreqRangeGen, applied to the gate's number inputs.
+      TdrGateGen: int
       Status: string option }
 
 let initModel =
@@ -69,6 +77,8 @@ let initModel =
       ShowGroupDelayExtrema = true
       ShowTdrExtrema = true
       SmoothGroupDelay = false
+      TdrGateNs = None
+      TdrGateGen = 0
       Status = None }
 
 type Message =
@@ -81,6 +91,8 @@ type Message =
     /// chart kinds never show min/max markers (see TouchstonePlot.fs).
     | SetShowExtrema of chart: ChartKind * show: bool
     | SetSmoothGroupDelay of bool
+    | SetTdrGate of loNs: float * hiNs: float
+    | ResetTdrGate
     | SetFreqRange of fileName: string * loGHz: float * hiGHz: float
     | ResetFreqRange of fileName: string
     | SetFreqRangeLinked of fileName: string * linked: bool
@@ -131,6 +143,11 @@ let update message model =
     | SetShowExtrema(TdrChart, show) -> { model with ShowTdrExtrema = show }
     | SetShowExtrema(_, _) -> model
     | SetSmoothGroupDelay smooth -> { model with SmoothGroupDelay = smooth }
+    | SetTdrGate(loNs, hiNs) ->
+        { model with
+            TdrGateNs = Some(min loNs hiNs, max loNs hiNs)
+            TdrGateGen = model.TdrGateGen + 1 }
+    | ResetTdrGate -> { model with TdrGateNs = None; TdrGateGen = model.TdrGateGen + 1 }
     | SetFreqRange(fileName, loGHz, hiGHz) ->
         let lo, hi = min loGHz hiGHz, max loGHz hiGHz
 

@@ -742,25 +742,22 @@ let private kaiserTaper (m: int) (k: int) =
     let ratio = float k / float (m - 1)
     besselI0 (kaiserBeta * sqrt (max 0.0 (1.0 - ratio * ratio))) / kaiserI0Beta
 
-/// Time (ns) and impedance (Ω) from a reflection-coefficient spectrum
-/// `gamma` sampled at `freqsHz` (ascending, need not be uniform). Classic
-/// "lowpass equivalent" TDR: extrapolates flat down to DC, resamples onto a
-/// uniform grid, windows it, builds the Hermitian-symmetric full spectrum,
-/// inverse-FFTs to an impulse response, cumulative-sums to a step response,
-/// and converts reflection coefficient to impedance via
-/// Z(t) = Z0 · (1+ρ(t)) / (1-ρ(t)).
-///
-/// The window is unity at DC and only tapers toward Nyquist/fMax — a plain
-/// symmetric Hann window (zero at *both* ends) was tried first and zeroed
-/// out the DC bin, which made every step response decay back to 0 right
-/// after the transient instead of holding at its true plateau: the hard
-/// cutoff at fMax is what causes ringing, not DC, so only that end needs
-/// tapering. See kaiserTaper for the taper shape itself.
-let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
+/// Fixed FFT length for the whole TDR pipeline (impedance view and gating
+/// alike): the time resolution this yields, dt = 1/(2·fMax), is
+/// algebraically independent of this constant (see tdrFullSpanNs) — a
+/// bigger value only extends how far out in time the result goes before
+/// wrapping around, not how sharp a step edge can look.
+let private tdrNFft = 4096
+
+/// A file's reflection-coefficient spectrum resampled onto the pipeline's
+/// own uniform 0..fMax grid (spacing df, m = nFft/2+1 bins), flat-
+/// extrapolated below the lowest measured frequency. Shared by tdrImpedance
+/// (which windows this before inverse-FFTing, for a smooth displayed step
+/// response) and tdrGatedResponse (which deliberately doesn't — see there).
+let private tdrOneSided (freqsHz: float[]) (gamma: Complex[]) =
     let fMin, fMax = freqsHz.[0], freqsHz.[freqsHz.Length - 1]
     let dfMeasured = (fMax - fMin) / float (freqsHz.Length - 1)
-    let nFft = 4096
-    let m = nFft / 2 + 1
+    let m = tdrNFft / 2 + 1
     let df = fMax / float (m - 1)
 
     let oneSided =
@@ -775,40 +772,139 @@ let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
                 let frac = idxF - float lo
                 if lo = hi then gamma.[lo] else gamma.[lo] * Complex(1.0 - frac, 0.0) + gamma.[hi] * Complex(frac, 0.0))
 
-    let windowed = oneSided |> Array.mapi (fun k g -> g * Complex(kaiserTaper m k, 0.0))
+    oneSided, df, m
 
-    let full = Array.zeroCreate<Complex> nFft
+/// Real impulse response from a one-sided (0..fMax) spectrum: applies
+/// `taper` to each bin, builds the Hermitian-symmetric full nFft spectrum,
+/// and inverse-FFTs it. `taper = fun _ g -> g` for no windowing at all.
+let private tdrImpulse (taper: int -> Complex -> Complex) (oneSided: Complex[]) =
+    let m = oneSided.Length
+    let windowed = oneSided |> Array.mapi taper
+
+    let full = Array.zeroCreate<Complex> tdrNFft
     full.[0] <- Complex(windowed.[0].Real, 0.0)
     for k in 1 .. m - 2 do
         full.[k] <- windowed.[k]
-        full.[nFft - k] <- Complex.Conjugate windowed.[k]
+        full.[tdrNFft - k] <- Complex.Conjugate windowed.[k]
     full.[m - 1] <- Complex(windowed.[m - 1].Real, 0.0)
 
-    let impulse = fft true full |> Array.map (fun c -> c.Real)
-    let dt = 1.0 / (float nFft * df)
+    fft true full |> Array.map (fun c -> c.Real)
 
-    let step = Array.zeroCreate<float> nFft
+/// Time (ns) and impedance (Ω) from a reflection-coefficient spectrum
+/// `gamma` sampled at `freqsHz` (ascending, need not be uniform). Classic
+/// "lowpass equivalent" TDR: resamples onto a uniform grid (tdrOneSided),
+/// windows it, inverse-FFTs to an impulse response (tdrImpulse),
+/// cumulative-sums to a step response, and converts reflection coefficient
+/// to impedance via Z(t) = Z0 · (1+ρ(t)) / (1-ρ(t)).
+///
+/// The window is unity at DC and only tapers toward Nyquist/fMax — a plain
+/// symmetric Hann window (zero at *both* ends) was tried first and zeroed
+/// out the DC bin, which made every step response decay back to 0 right
+/// after the transient instead of holding at its true plateau: the hard
+/// cutoff at fMax is what causes ringing, not DC, so only that end needs
+/// tapering. See kaiserTaper for the taper shape itself.
+let private tdrImpedance (z0: float) (freqsHz: float[]) (gamma: Complex[]) =
+    let oneSided, df, m = tdrOneSided freqsHz gamma
+    let impulse = oneSided |> tdrImpulse (fun k g -> g * Complex(kaiserTaper m k, 0.0))
+    let dt = 1.0 / (float tdrNFft * df)
+
+    let step = Array.zeroCreate<float> tdrNFft
     let mutable acc = 0.0
-    for i in 0 .. nFft - 1 do
+    for i in 0 .. tdrNFft - 1 do
         acc <- acc + impulse.[i]
         step.[i] <- acc
 
     // Only the first half of the (real, time-domain) result is meaningful
     // resolution-wise; the rest mirrors it per the DFT's implicit periodicity.
-    let half = nFft / 2
+    let half = tdrNFft / 2
     let timeNs = Array.init half (fun i -> float i * dt * 1e9)
     let impedance = step.[0 .. half - 1] |> Array.map (fun rho -> z0 * (1.0 + rho) / (1.0 - rho))
     timeNs, impedance
 
+/// Native full causal time span (ns) of a file's TDR view — the same
+/// `dt = 1/(2·fMax)` derivation tdrImpedance uses, times the number of
+/// meaningful (first-half) samples. Exposed for the web UI to bound its
+/// time-gate slider; the full span is also that slider's "no gating" default.
+let tdrFullSpanNs (data: TouchstoneFile) =
+    let fMax = data.Frequencies.[data.Frequencies.Length - 1]
+    let half = tdrNFft / 2
+    float (half - 1) / (2.0 * fMax) * 1e9
+
+/// Raised-cosine gate over an impulse response's causal (first) half: unity
+/// inside [loNs, hiNs], tapering to 0 over `max(10% of the gate width, 3
+/// samples)` ns at each edge — a hard rectangular cutoff would reintroduce
+/// the same ringing windowing exists to avoid elsewhere in this module. 0
+/// everywhere past the causal half (k >= half): that's the numerically
+/// negligible "wrapped negative time" tail tdrImpedance already discards
+/// for the same reason.
+let private gateMask (nFft: int) (dt: float) (loNs: float) (hiNs: float) (k: int) =
+    let half = nFft / 2
+
+    if k >= half then
+        0.0
+    else
+        let tNs = float k * dt * 1e9
+        let taper = max ((hiNs - loNs) * 0.1) (dt * 1e9 * 3.0)
+
+        if tNs < loNs - taper || tNs > hiNs + taper then 0.0
+        elif tNs < loNs then 0.5 * (1.0 + cos (Math.PI * (loNs - tNs) / taper))
+        elif tNs > hiNs then 0.5 * (1.0 + cos (Math.PI * (tNs - hiNs) / taper))
+        else 1.0
+
+/// Gates a file's TDR impulse response to [loNs, hiNs] ns (None = the full
+/// causal record — a useful sanity check too, since it closely reproduces
+/// the original Γ(f)) and forward-FFTs it back to a frequency response, for
+/// isolating one reflection/discontinuity from others sharing the same
+/// line. Deliberately builds its own *unwindowed* impulse response rather
+/// than reusing tdrImpedance's: the Kaiser taper there exists to smooth the
+/// *displayed step response* and, tried here first, baked its own high-
+/// frequency roll-off straight into this reconstruction — caught by a
+/// round-trip test with no gate applied (should reproduce the original
+/// spectrum almost exactly; it didn't, until the window was dropped from
+/// this path). Frequencies returned are the pipeline's own uniform grid
+/// (0..fMax, spacing df), not the original measurement's.
+let private tdrGatedResponse (gateNs: (float * float) option) (freqsHz: float[]) (gamma: Complex[]) =
+    let oneSided, df, m = tdrOneSided freqsHz gamma
+    let impulse = oneSided |> tdrImpulse (fun _ g -> g)
+    let dt = 1.0 / (float tdrNFft * df)
+    let half = tdrNFft / 2
+    let loNs, hiNs = defaultArg gateNs (0.0, float (half - 1) * dt * 1e9)
+
+    let gated = impulse |> Array.mapi (fun k v -> Complex(v * gateMask tdrNFft dt loNs hiNs k, 0.0))
+    let spectrum = fft false gated
+    let freqsOutHz = Array.init m (fun k -> float k * df)
+    freqsOutHz, spectrum.[0 .. m - 1]
+
 /// Reflection parameters selectable for TDR: S11, S22 (same pairing as the Smith chart).
 let tdrOrder = [ (1, 1); (2, 2) ]
 
+/// Vertical dashed guide lines marking a time gate's bounds on the TDR
+/// Impedance chart, spanning the full plot height (Yref "paper") regardless
+/// of the impedance axis' own range. Empty when `gateNs` is None.
+let private gateBoundaryShapes (gateNs: (float * float) option) =
+    match gateNs with
+    | None -> []
+    | Some(lo, hi) ->
+        let vline x =
+            Shape.init (
+                ShapeType = StyleParam.ShapeType.Line,
+                X0 = x,
+                X1 = x,
+                Y0 = 0.0,
+                Y1 = 1.0,
+                Xref = "x",
+                Yref = "paper",
+                Line = Line.init (Color = Color.fromString "#999999", Dash = StyleParam.DrawingStyle.Dot, Width = 1.5)
+            )
+
+        [ vline lo; vline hi ]
+
 /// Not lttb-downsampled unlike the other *Trace helpers: the native point
-/// count here is fixed at half of tdrImpedance's nFft (2048), not the
-/// thousands-of-points a real VNA sweep can have, so it's well within
-/// Plotly's comfort zone already. lttb picks points by global significance
-/// (e.g. the step edge), which looks jagged once zoomed into a region it
-/// didn't optimize for — this chart is exactly the one people zoom into.
+/// count here is fixed at half of tdrNFft (2048), not the thousands-of-
+/// points a real VNA sweep can have, so it's well within Plotly's comfort
+/// zone already. lttb picks points by global significance (e.g. the step
+/// edge), which looks jagged once zoomed into a region it didn't optimize
+/// for — this chart is exactly the one people zoom into.
 let private tdrSeriesAndTrace (label: string) (i: int) (data: TouchstoneFile) =
     let gamma = data.Matrices |> Array.map (fun m -> m.[i, i])
     let timeNs, impedance = tdrImpedance data.Option.R data.Frequencies gamma
@@ -819,9 +915,18 @@ let private tdrSeriesAndTrace (label: string) (i: int) (data: TouchstoneFile) =
 /// Time-domain impedance (Ω) from the selected reflection coefficients (e.g.
 /// `[ (1,1); (2,2) ]` for S11+S22) of several labeled S-parameter files, each
 /// converted independently via inverse FFT of its own Γ(f) — see
-/// tdrImpedance. Non-S-parameter files are ignored. Returns None if
-/// `selected` is empty or none of the files are S-parameter data.
-let tdrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+/// tdrImpedance. `gateNs`, if set, is drawn as a pair of vertical guide
+/// lines (see gateBoundaryShapes) rather than applied to the plotted curve
+/// itself — the actual gating happens in the frequency-domain reconstruction
+/// (tdrGatedChartMulti); this is just a visual aid for choosing its bounds.
+/// Non-S-parameter files are ignored. Returns None if `selected` is empty or
+/// none of the files are S-parameter data.
+let tdrChartMulti
+    (showExtrema: bool)
+    (gateNs: (float * float) option)
+    (selected: (int * int) list)
+    (files: (string * TouchstoneFile) list)
+    =
     if selected.IsEmpty then
         None
     else
@@ -838,7 +943,8 @@ let tdrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (stri
 
             let traces = results |> List.map fst
             let series = results |> List.map snd
-            let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "Ω" series else [], []
+            let extremaShapes, annotations = if showExtrema then extremumMarkers "x" "y" "Ω" series else [], []
+            let shapes = extremaShapes @ gateBoundaryShapes gateNs
 
             let chart =
                 traces
@@ -850,6 +956,53 @@ let tdrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (stri
                 |> Chart.withAnnotations annotations
 
             Some { Chart = chart; Csv = fun () -> toCsv "Time (ns)" "Impedance (Ω)" series }
+
+let private tdrGatedTrace (label: string) (gateNs: (float * float) option) (i: int) (data: TouchstoneFile) =
+    let gamma = data.Matrices |> Array.map (fun m -> m.[i, i])
+    let freqsOutHz, gammaOut = tdrGatedResponse gateNs data.Frequencies gamma
+    let freqGHz = freqsOutHz |> Array.map (fun f -> f / 1e9)
+    let db = gammaOut |> Array.map toDb
+    let name = (sprintf "%s S%d%d" label i i).Trim()
+    let trace = styledLine label name freqGHz db
+    trace, (name, freqGHz, db)
+
+/// Magnitude (dB) of the gated (see tdrGatedResponse) reflection
+/// coefficients for the selected S11/S22 of several labeled S-parameter
+/// files — the frequency-domain counterpart of the TDR Impedance section's
+/// time gate: isolates whatever's inside [loNs, hiNs] (None = ungated, the
+/// full record) from other reflections/discontinuities sharing the same
+/// line. Non-S-parameter files are ignored. Returns None if `selected` is
+/// empty or none of the files are S-parameter data.
+let tdrGatedChartMulti
+    (gateNs: (float * float) option)
+    (selected: (int * int) list)
+    (files: (string * TouchstoneFile) list)
+    =
+    if selected.IsEmpty then
+        None
+    else
+        let sFiles = files |> List.filter (fun (_, data) -> data.Option.Parameter = S)
+
+        if sFiles.IsEmpty then
+            None
+        else
+            let results =
+                [ for (label, data) in sFiles do
+                    for (i, j) in selected do
+                        if i = j && i <= data.Ports then
+                            tdrGatedTrace label gateNs i data ]
+
+            let traces = results |> List.map fst
+            let series = results |> List.map snd
+
+            let chart =
+                traces
+                |> Chart.combine
+                |> Chart.withTitle "TDR Gated Magnitude (dB)"
+                |> Chart.withXAxisStyle "Frequency (GHz)"
+                |> Chart.withYAxisStyle "Magnitude (dB)"
+
+            Some { Chart = chart; Csv = fun () -> toCsv "Frequency (GHz)" "Magnitude (dB)" series }
 
 /// Opens magnitude + phase overlay charts (and, for S-parameters, a Smith chart) in the default browser.
 let show (data: TouchstoneFile) =
