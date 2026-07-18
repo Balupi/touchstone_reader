@@ -350,7 +350,12 @@ let private csvDownloadButton (divId: string) =
 /// so interop.js resizes it on expand — otherwise a chart drawn while
 /// hidden renders at 0 size and never fixes itself. `extraControls` renders
 /// between the toggle row and the chart (e.g. Group Delay's absolute/
-/// deviation switch); pass `empty ()` for none.
+/// deviation switch); `nested` renders after the chart (e.g. TDR's Gated
+/// Magnitude sub-section, sharing this section's own parameter selection
+/// rather than duplicating a toggle row for the same S11/S22); pass
+/// `empty ()` for either when not needed. Both `extraControls` and `nested`
+/// (and the chart div itself) are skipped when nothing's selected, so a
+/// nested sub-section never renders with no parameters chosen for it either.
 let private chartSection
     (dispatch: Dispatch<Message>)
     (title: string)
@@ -361,6 +366,7 @@ let private chartSection
     (extraControls: Node)
     (divStyle: string)
     (divId: string)
+    (nested: Node)
     =
     details {
         attr.``class`` "chart-section box mt-4"
@@ -390,10 +396,39 @@ let private chartSection
                 "Select at least one parameter above."
             }
         else
-            div {
-                attr.id divId
-                attr.style divStyle
+            concat {
+                div {
+                    attr.id divId
+                    attr.style divStyle
+                }
+
+                nested
             }
+    }
+
+/// Collapsible sub-section nested inside the TDR Impedance section, holding
+/// just the Gated Magnitude chart — shares TDR's own S11/S22 selection and
+/// gate state instead of duplicating a second toggle row for the same
+/// parameters; only its CSV button (a different chart, different data) is
+/// section-specific.
+let private tdrGatedSubSection (isOpenByDefault: bool) (divId: string) =
+    details {
+        attr.``class`` "chart-section mt-4"
+
+        if isOpenByDefault then attr.``open`` true else attr.empty ()
+
+        summary {
+            attr.``class`` "title is-6"
+            attr.style "cursor: pointer;"
+            "Gated Magnitude (dB)"
+        }
+
+        div {
+            attr.``class`` "field is-grouped mb-3"
+            csvDownloadButton divId
+        }
+
+        div { attr.id divId }
     }
 
 /// Absolute-vs-deviation-from-mean switch for the Group Delay section; only
@@ -734,6 +769,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     (extremaToggle dispatch MagnitudeChart model.ShowMagnitudeExtrema)
                                     ""
                                     "chart-magnitude"
+                                    (empty ())
 
                                 chartSection
                                     dispatch
@@ -745,6 +781,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     (empty ())
                                     ""
                                     "chart-phase"
+                                    (empty ())
                             }
 
                         if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
@@ -758,6 +795,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 (empty ())
                                 "max-width: 700px; margin: 0 auto;"
                                 "chart-smith"
+                                (empty ())
 
                         if has2Port then
                             let comparableCount = ok |> List.filter (fun (_, data) -> data.Ports = 2) |> List.length
@@ -776,38 +814,27 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 })
                                 ""
                                 "chart-group-delay"
+                                (empty ())
 
                         let sFileData = ok |> List.map snd |> List.filter (fun data -> data.Option.Parameter = S)
 
                         if not sFileData.IsEmpty then
                             let maxGateNs = sFileData |> List.map tdrFullSpanNs |> List.max
 
-                            concat {
-                                chartSection
-                                    dispatch
-                                    "TDR Impedance (Ω)"
-                                    false
-                                    TdrChart
-                                    tdrOrder
-                                    model.TdrSelected
-                                    (concat {
-                                        extremaToggle dispatch TdrChart model.ShowTdrExtrema
-                                        tdrGateSlider dispatch model.TdrGateNs model.TdrGateGen maxGateNs
-                                    })
-                                    ""
-                                    "chart-tdr"
-
-                                chartSection
-                                    dispatch
-                                    "TDR Gated Magnitude (dB)"
-                                    false
-                                    TdrChart
-                                    tdrOrder
-                                    model.TdrSelected
-                                    (empty ())
-                                    ""
-                                    "chart-tdr-gated"
-                            }
+                            chartSection
+                                dispatch
+                                "TDR Impedance (Ω)"
+                                false
+                                TdrChart
+                                tdrOrder
+                                model.TdrSelected
+                                (concat {
+                                    extremaToggle dispatch TdrChart model.ShowTdrExtrema
+                                    tdrGateSlider dispatch model.TdrGateNs model.TdrGateGen maxGateNs
+                                })
+                                ""
+                                "chart-tdr"
+                                (tdrGatedSubSection false "chart-tdr-gated")
                     }
             }
     }
