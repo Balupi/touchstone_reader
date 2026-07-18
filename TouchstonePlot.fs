@@ -241,7 +241,9 @@ let magnitudeGrid (data: TouchstoneFile) =
         for j in 1 .. n ->
             let ys = data.Matrices |> Array.map (fun m -> toDb m.[i, j])
             Chart.Line(x = freqGHz, y = ys, Name = sprintf "%A%d%d" data.Option.Parameter i j)
-            |> Chart.withTitle (sprintf "%A%d%d" data.Option.Parameter i j) ]
+            |> Chart.withTitle (sprintf "%A%d%d" data.Option.Parameter i j)
+            |> Chart.withXAxisStyle "Frequency (GHz)"
+            |> Chart.withYAxisStyle "Magnitude (dB)" ]
     |> Chart.Grid(n, n)
     |> Chart.withSize (350 * n, 300 * n)
 
@@ -284,6 +286,7 @@ let private quadMulti
                 files2p
                 |> List.map (fun (label, data) -> oneParamTrace label toY i j data)
                 |> Chart.combine
+                |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
 
             let shapes, annotations =
