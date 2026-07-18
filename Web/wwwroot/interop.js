@@ -208,8 +208,8 @@ window.touchstoneInterop = {
     },
 
     // Hides/shows every trace for `fileName` in every currently-rendered
-    // chart at once (a file's traces are spread across up to 4 separate
-    // figures — magnitude/phase/smith/group-delay). Uses the same Plotly
+    // chart at once (a file's traces are spread across every chart section —
+    // magnitude/phase/smith/group-delay/tdr/tdr-gated). Uses the same Plotly
     // `visible: 'legendonly'` state a click on the file's legend entry
     // already toggles, just reachable from the file list's color swatch too.
     _setFileVisible: function (fileName, visible) {
@@ -222,6 +222,48 @@ window.touchstoneInterop = {
                     Plotly.restyle(el, { visible: visible ? true : 'legendonly' }, [idx]);
                 }
             });
+        });
+    },
+
+    // Shared by the file-list swatch click and the legend-click handler
+    // below: flips `fileName`'s hidden state, fades its swatch to match,
+    // and propagates the new visibility to every currently-rendered chart
+    // via _setFileVisible/_hiddenFiles — the single source of truth both
+    // entry points drive, so either one hiding a file keeps it hidden
+    // everywhere (including charts not rendered yet) until either one
+    // un-hides it again.
+    _toggleFileHidden: function (fileName) {
+        const nowHidden = !window.touchstoneInterop._hiddenFiles.has(fileName);
+        if (nowHidden) {
+            window.touchstoneInterop._hiddenFiles.add(fileName);
+        } else {
+            window.touchstoneInterop._hiddenFiles.delete(fileName);
+        }
+        const swatch = document.getElementById('swatch-' + encodeURIComponent(fileName));
+        if (swatch) swatch.style.opacity = nowHidden ? '0.25' : '1';
+        window.touchstoneInterop._setFileVisible(fileName, !nowHidden);
+    },
+
+    // Plotly's own default legend-click behavior only restyles the one
+    // chart the clicked legend belongs to — a file's traces on every other
+    // chart, and _hiddenFiles itself, never find out, so the hidden state
+    // doesn't survive that chart's next re-render (e.g. changing the TDR
+    // gate) and doesn't reach sibling charts (e.g. hiding a file via the
+    // TDR chart's own legend never hid it on Magnitude). Intercepting the
+    // click and routing it through the same _toggleFileHidden the swatch
+    // uses — returning false to cancel Plotly's own restyle — makes legend
+    // clicks behave identically to swatch clicks everywhere. Rebound on
+    // every render rather than once: Plotly replaces a graph div's internal
+    // event emitter on some react() calls (see _bindTdrGateDrag), which
+    // would otherwise orphan this listener the same way it did there.
+    _bindLegendClick: function (divId) {
+        const el = document.getElementById(divId);
+        el.removeAllListeners('plotly_legendclick');
+        el.on('plotly_legendclick', function (eventData) {
+            const trace = eventData.data[eventData.curveNumber];
+            const fileName = window.touchstoneInterop._fileLabelFor(trace.name);
+            if (fileName) window.touchstoneInterop._toggleFileHidden(fileName);
+            return false;
         });
     },
 
@@ -324,9 +366,10 @@ window.touchstoneInterop = {
         // to chart-tdr's event emitter before Plotly had finished setting it
         // up on that div's very first render, silently missing the swap
         // renderChart itself waits for elsewhere too.
-        Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), window.touchstoneInterop._config(divId)).then(
-            () => window.touchstoneInterop._bindTdrGateDrag(divId)
-        );
+        Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), window.touchstoneInterop._config(divId)).then(() => {
+            window.touchstoneInterop._bindTdrGateDrag(divId);
+            window.touchstoneInterop._bindLegendClick(divId);
+        });
     },
 
     // Lets the two vertical dashed lines TouchstonePlot.fs draws for an
@@ -414,13 +457,28 @@ window.touchstoneInterop = {
     // A chart drawn while its <details> is collapsed measures its container
     // as 0x0. Resize it once the section is actually expanded. Safe to call
     // repeatedly: already-bound elements are skipped.
+    //
+    // Also rebinds _bindTdrGateDrag/_bindLegendClick here, not just from
+    // renderChart: a chart whose very first render happens while its
+    // section is still collapsed (0x0) can end up with those listeners
+    // silently not attached to begin with — same underlying cause as the
+    // "Plotly replaces the internal event emitter" issue renderChart's own
+    // rebind-every-render already works around, just triggered by this
+    // resize instead of a react() call, so renderChart's rebind never runs
+    // for it. Found by testing the nested TDR Gated Magnitude sub-section
+    // specifically, since it's the one chart that both starts collapsed
+    // *and* has interactive listeners riding on it.
     setupCollapsibleCharts: function () {
         document.querySelectorAll('details.chart-section').forEach((details) => {
             if (details.dataset.resizeBound) return;
             details.dataset.resizeBound = 'true';
             details.addEventListener('toggle', () => {
                 if (!details.open) return;
-                details.querySelectorAll('.js-plotly-plot').forEach((el) => Plotly.Plots.resize(el));
+                details.querySelectorAll('.js-plotly-plot').forEach((el) => {
+                    Plotly.Plots.resize(el);
+                    window.touchstoneInterop._bindTdrGateDrag(el.id);
+                    window.touchstoneInterop._bindLegendClick(el.id);
+                });
             });
         });
 
@@ -441,16 +499,7 @@ window.touchstoneInterop = {
             if (el.dataset.toggleBound) return;
             el.dataset.toggleBound = 'true';
             const fileName = decodeURIComponent(el.id.slice('swatch-'.length));
-            el.addEventListener('click', () => {
-                const nowHidden = !window.touchstoneInterop._hiddenFiles.has(fileName);
-                if (nowHidden) {
-                    window.touchstoneInterop._hiddenFiles.add(fileName);
-                } else {
-                    window.touchstoneInterop._hiddenFiles.delete(fileName);
-                }
-                el.style.opacity = nowHidden ? '0.25' : '1';
-                window.touchstoneInterop._setFileVisible(fileName, !nowHidden);
-            });
+            el.addEventListener('click', () => window.touchstoneInterop._toggleFileHidden(fileName));
         });
     }
 };
