@@ -268,6 +268,14 @@ window.touchstoneInterop = {
     _config: function (divId) {
         return {
             responsive: true,
+            // A shape's own `editable: true` (TouchstonePlot.fs's gate
+            // lines) only lets Plotly recognize a grab on it and suppress
+            // the plot's normal box-zoom drag underneath — actually
+            // committing the resulting position change needs this broader
+            // per-chart permission too, or the drag is intercepted but
+            // never applied. Harmless for every other chart here, which
+            // has no editable shapes to begin with.
+            edits: { shapePosition: true },
             modeBarButtonsToRemove: ['toImage'],
             modeBarButtonsToAdd: [
                 {
