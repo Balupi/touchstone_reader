@@ -46,7 +46,16 @@ window.touchstoneInterop = {
     // Magnitude/Phase/Group Delay — but not the Smith chart, whose x-axis is
     // Re(Γ) rather than frequency and reads better with normal per-point hover.
     _makeResponsive: function (layout) {
-        layout = Object.assign({}, layout, { autosize: true })
+        // Plotly.react rebuilds the figure from scratch on every re-render
+        // (a parameter toggle, dragging the TDR gate, ...) and resets
+        // zoom/pan back to autorange unless told otherwise — uirevision
+        // staying the *same* string across successive renders of the same
+        // div is Plotly's own mechanism for "this is a live update to the
+        // same chart, preserve whatever the user zoomed/panned to," not
+        // "this is a brand new chart." Any fixed value works; it only needs
+        // to stay stable across a given div's own renders, not be unique
+        // per chart.
+        layout = Object.assign({}, layout, { autosize: true, uirevision: 'keep-zoom' })
         delete layout.width
         const isSmith = layout.xaxis && layout.xaxis.title && layout.xaxis.title.text === 'Re(Γ)'
         if (!isSmith) layout.hovermode = 'x unified'
