@@ -147,6 +147,14 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
 - **Simulating a click on a Plotly legend entry**: a synthetic click on the visible `.legend .traces`
   group doesn't trigger Plotly's own handler. Target the (invisible) `.legend .legendtoggle` hit-area
   element instead — that's what Plotly actually binds the click listener to.
+- **Checking axis labels means reading `chartDiv.layout.xaxis.title`/`.yaxis.title` (and `xaxis2`,
+  `yaxis2`, ... per subplot after `Chart.Grid`) live in the browser, not just reading the F# chart-
+  building code.** A source-level read of `quadMulti` in `TouchstonePlot.fs` looked complete — each
+  subplot had a `Chart.withYAxisStyle` call — but only the *rendered* layout showed the X axis had no
+  title at all, since nothing ever called the X-axis equivalent for it. `preview_eval` returning
+  `Object.keys(layout).filter(k => k.startsWith('xaxis') || k.startsWith('yaxis'))` mapped to their
+  `.title` is a quick way to audit every axis on a chart at once, across every subplot Plotly.NET's
+  `Chart.Grid` numbered.
 - If this or a follow-up project adds Expecto: `dotnet run`, not `dotnet test`, is the right way to
   invoke it — but that's not set up anywhere in this repo yet.
 
@@ -224,6 +232,17 @@ A few concepts that came up and are worth being comfortable with, not just patte
   whole point is being zoomed into (to see a step's sharpness/ringing) is actively counterproductive:
   lttb picks points by whole-curve significance, so a zoomed-in view shows the straight lines between
   *those* points, not a locally accurate curve — it looks jagged exactly where users look closest.
+- **A window built for one purpose can silently contaminate a second use of the same pipeline stage.**
+  TDR gating (`tdrGatedResponse` in `TouchstonePlot.fs`) forward-FFTs a gated impulse response back to a
+  frequency response, and at first reused `tdrImpedance`'s Kaiser-windowed impulse response to do it. That
+  window exists to smooth the *displayed step response* — a legitimate, one-way use — but baked its own
+  high-frequency roll-off straight into the round-tripped reconstruction, caught by a sanity test that
+  gates *nothing* (the full record) and checks the result reproduces the original spectrum: it didn't,
+  until `tdrGatedResponse` was given its own unwindowed impulse response (`tdrOneSided` factored out and
+  shared, `tdrImpulse` takes the taper as a parameter so each caller picks its own). Any time a
+  time-domain/frequency-domain round trip reuses a windowed intermediate built for a *different*,
+  one-directional purpose, check whether that window's effect actually survives being transformed back —
+  it usually does, silently.
 
 ---
 
