@@ -883,7 +883,13 @@ let tdrOrder = [ (1, 1); (2, 2) ]
 
 /// Vertical dashed guide lines marking a time gate's bounds on the TDR
 /// Impedance chart, spanning the full plot height (Yref "paper") regardless
-/// of the impedance axis' own range. Empty when `gateNs` is None.
+/// of the impedance axis' own range. `Editable = true` lets Plotly's own
+/// shape-drag handling move a line when the pointer grabs it directly,
+/// without taking over the rest of the plot area's normal box-zoom drag —
+/// interop.js listens for the resulting `plotly_relayout` event and feeds
+/// the new position back into SetTdrGate. Always emitted in [lo; hi] order,
+/// so the web UI can identify which shape is which by position alone.
+/// Empty when `gateNs` is None.
 let private gateBoundaryShapes (gateNs: (float * float) option) =
     match gateNs with
     | None -> []
@@ -897,6 +903,7 @@ let private gateBoundaryShapes (gateNs: (float * float) option) =
                 Y1 = 1.0,
                 Xref = "x",
                 Yref = "paper",
+                Editable = true,
                 Line = Line.init (Color = Color.fromString "#999999", Dash = StyleParam.DrawingStyle.Dot, Width = 1.5)
             )
 

@@ -311,7 +311,53 @@ window.touchstoneInterop = {
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.
-        Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), window.touchstoneInterop._config(divId));
+        // _bindTdrGateDrag must wait for this to actually finish — binding
+        // synchronously right after calling (not awaiting) react() attached
+        // to chart-tdr's event emitter before Plotly had finished setting it
+        // up on that div's very first render, silently missing the swap
+        // renderChart itself waits for elsewhere too.
+        Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), window.touchstoneInterop._config(divId)).then(
+            () => window.touchstoneInterop._bindTdrGateDrag(divId)
+        );
+    },
+
+    // Lets the two vertical dashed lines TouchstonePlot.fs draws for an
+    // active TDR time gate (gateBoundaryShapes, Editable = true) be dragged
+    // directly on the chart instead of only via the number inputs/slider
+    // below it. Plotly's own shape-drag handling only kicks in when the
+    // pointer grabs a shape itself, so dragging anywhere else in the plot
+    // area still does Plotly's normal box-zoom — the two gestures don't
+    // compete for the same drag. The gate lines are always the *last* two
+    // entries in layout.shapes (extrema min/max lines, if shown, come
+    // first — see gateBoundaryShapes/tdrChartMulti in TouchstonePlot.fs),
+    // so they're identified by position, not by name/id.
+    //
+    // Rebinds on *every* render rather than once: Plotly replaces the graph
+    // div's internal event emitter object on some react() calls (observed
+    // here specifically when the shapes count changes, e.g. a gate first
+    // appearing), silently orphaning a listener attached to the old one —
+    // a "bind once" guard leaves the chart's drag handles permanently dead
+    // the moment that first happens. removeAllListeners first, so a render
+    // that *didn't* get a fresh emitter doesn't accumulate duplicates.
+    _bindTdrGateDrag: function (divId) {
+        if (divId !== 'chart-tdr') return;
+
+        const el = document.getElementById(divId);
+        el.removeAllListeners('plotly_relayout');
+        el.on('plotly_relayout', function (eventData) {
+            const shapes = (el.layout && el.layout.shapes) || [];
+            if (shapes.length < 2) return;
+
+            const loIdx = shapes.length - 2;
+            const hiIdx = shapes.length - 1;
+            const loKey = 'shapes[' + loIdx + '].x0';
+            const hiKey = 'shapes[' + hiIdx + '].x0';
+            if (!(loKey in eventData) && !(hiKey in eventData)) return;
+
+            const lo = Math.max(0, loKey in eventData ? eventData[loKey] : shapes[loIdx].x0);
+            const hi = Math.max(0, hiKey in eventData ? eventData[hiKey] : shapes[hiIdx].x0);
+            window.touchstoneInterop._dotNetRef.invokeMethodAsync('OnTdrGateDragged', lo, hi);
+        });
     },
 
     // Without this, a chart rendered under one OS theme keeps that theme's

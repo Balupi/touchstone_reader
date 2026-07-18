@@ -44,6 +44,12 @@ type App() =
         | Some thunk -> thunk ()
         | None -> ""
 
+    /// Called from interop.js's plotly_relayout listener when the user drags
+    /// one of the TDR gate's on-chart guide lines directly, instead of using
+    /// the number inputs/slider below the chart.
+    [<JSInvokable>]
+    member this.OnTdrGateDragged(loNs: float, hiNs: float) = this.Dispatch(SetTdrGate(loNs, hiNs))
+
     [<JSInvokable>]
     member this.OnFileDropped(fileName: string, content: string) =
         task {
