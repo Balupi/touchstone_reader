@@ -891,13 +891,6 @@ let tdrOrder = [ (1, 1); (2, 2) ]
 /// so the web UI can identify which shape is which by position alone.
 /// Empty when `gateNs` is None.
 ///
-/// Line width is 6, not a hairline: Plotly's shape-drag hit area is tied
-/// directly to the rendered stroke width (`pointer-events: stroke`), so a
-/// thin line needs the pointer within 1-2px of it or the click falls
-/// through to the plot's own box-zoom drag underneath instead — width 6
-/// gives it a comfortably grabbable target. Dash (not Dot) at this width,
-/// since dots that size read as chunky blobs rather than a guide line.
-///
 /// X0/X1 are offset from `x` by a tiny, visually-imperceptible epsilon
 /// rather than both exactly `x`: a perfectly vertical (or horizontal) line
 /// shape hits a known Plotly.js hit-detection bug where editable dragging
@@ -907,13 +900,21 @@ let tdrOrder = [ (1, 1); (2, 2) ]
 /// wrapper, see ropensci/plotly#1532; same underlying plotly.js drag code).
 /// A slight slant sidesteps it entirely. interop.js reads the midpoint of
 /// x0/x1 back out, so the epsilon never shows up in the reported gate value.
+///
+/// Distinct colors per line (not both the same grey) so "lo" and "hi" read
+/// apart at a glance — helpful since interop.js also clamps each to never
+/// cross the other while dragging, which would otherwise make it unclear
+/// which line is which once they're close together.
+let private gateLoColor = "#17a2b8"
+let private gateHiColor = "#c2185b"
+
 let private gateBoundaryShapes (gateNs: (float * float) option) =
     match gateNs with
     | None -> []
     | Some(lo, hi) ->
         let epsilon = 1e-6
 
-        let vline x =
+        let vline (color: string) x =
             Shape.init (
                 ShapeType = StyleParam.ShapeType.Line,
                 X0 = x - epsilon,
@@ -923,10 +924,10 @@ let private gateBoundaryShapes (gateNs: (float * float) option) =
                 Xref = "x",
                 Yref = "paper",
                 Editable = true,
-                Line = Line.init (Color = Color.fromString "#999999", Dash = StyleParam.DrawingStyle.Dash, Width = 6.0)
+                Line = Line.init (Color = Color.fromString color, Dash = StyleParam.DrawingStyle.Dot, Width = 1.5)
             )
 
-        [ vline lo; vline hi ]
+        [ vline gateLoColor lo; vline gateHiColor hi ]
 
 /// Not lttb-downsampled unlike the other *Trace helpers: the native point
 /// count here is fixed at half of tdrNFft (2048), not the thousands-of-

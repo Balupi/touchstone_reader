@@ -369,8 +369,21 @@ window.touchstoneInterop = {
             // would report a position off by that (invisible but nonzero)
             // epsilon.
             const midX = (s) => (s.x0 + s.x1) / 2;
-            const lo = Math.max(0, midX(shapes[loIdx]));
-            const hi = Math.max(0, midX(shapes[hiIdx]));
+            let lo = Math.max(0, midX(shapes[loIdx]));
+            let hi = Math.max(0, midX(shapes[hiIdx]));
+
+            // Clamp whichever handle just moved instead of letting it cross
+            // the other one — State.fs's own min/max reordering already
+            // guarantees a valid (lo <= hi) gate either way, but without
+            // this the crossed handle would visually swap to the other
+            // side once you drag past it, which reads as the line jumping
+            // rather than stopping. minGapNs is deliberately tiny (not
+            // meant to be a visible "closest allowed gate width", just
+            // enough to keep the two lines distinguishable).
+            const minGapNs = 0.001;
+            if (loKey in eventData && lo > hi - minGapNs) lo = hi - minGapNs;
+            if (hiKey in eventData && hi < lo + minGapNs) hi = lo + minGapNs;
+
             window.touchstoneInterop._dotNetRef.invokeMethodAsync('OnTdrGateDragged', lo, hi);
         });
     },
