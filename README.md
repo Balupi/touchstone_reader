@@ -47,7 +47,7 @@ Each file's own collapsible "Details" holds:
 
 ### Charts
 
-Grouped into six collapsible sections (Magnitude open by default, the rest
+Grouped into five collapsible sections (Magnitude open by default, the rest
 collapsed), each with its own S-parameter toggle buttons (S11+S21 selected
 by default) scoped to what it can show:
 
@@ -70,12 +70,14 @@ by default) scoped to what it can show:
   only toward the high-frequency end where the hard measurement-bandwidth
   cutoff actually causes ringing), then converted from reflection
   coefficient to impedance via `Z(t) = Z0·(1+ρ(t))/(1-ρ(t))`. A two-handle
-  time-gate slider (shown as guide lines on the curve) marks the range used
-  by the next section.
-- **TDR Gated Magnitude (dB)** — the gated time window forward-FFT'd back to
-  a frequency response, isolating whichever reflection/discontinuity falls
-  inside the gate from others sharing the same line. Ungated (the default)
-  it reproduces the ordinary S11/S22 magnitude as a sanity check.
+  time-gate slider — also shown as a pair of colored guide lines directly on
+  the curve, draggable there instead of using the slider/number inputs, and
+  clamped so they can't cross each other — marks the range used by its own
+  nested, independently-collapsible **Gated Magnitude (dB)** sub-section,
+  which forward-FFTs the gated time window back to a frequency response,
+  isolating whichever reflection/discontinuity falls inside the gate from
+  others sharing the same line. Ungated (the default) it reproduces the
+  ordinary S11/S22 magnitude as a sanity check.
 
 Magnitude, Group Delay, and TDR can each show a min/max reference line (with
 the value labeled at the axis) for the global extreme across every loaded

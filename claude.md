@@ -94,6 +94,60 @@ else entirely.
   it. Re-apply any such client-only state every time new figure JSON comes
   in, not just when the user makes the choice. See `_hiddenFiles` /
   `_applyHiddenFiles`, applied inside `renderChart` itself in `interop.js`.
+- **`plotly_legendclick` is chart-local — it does not know about your other
+  charts.** Plotly's own default legend-click behavior restyles only the one
+  chart the clicked legend belongs to. If several separate `Plotly.react`-ed
+  divs are meant to share one logical "hide this file" state (as every chart
+  here does, via `_hiddenFiles`), a plain legend click desyncs it: the
+  clicked chart's trace hides, everything else doesn't, and since
+  `_hiddenFiles` itself never finds out, the hidden state doesn't even
+  survive that one chart's next re-render either. Fix: `el.on('plotly_legendclick', fn)`
+  where `fn` does the real work itself (here, calling the same
+  `_toggleFileHidden` the file-list swatch already uses) and `return false`
+  to cancel Plotly's own built-in restyle — see `_bindLegendClick` in
+  `interop.js`.
+- **Making a shape draggable (`layout.shapes[i].editable`) needs a second,
+  chart-wide permission too, and a shape that's perfectly axis-aligned
+  silently never drags at all.** Two separate gotchas found wiring up the
+  TDR gate's on-chart drag handles:
+  1. A shape's own `editable: true` only gets Plotly to recognize a grab on
+     it (suppressing the plot's normal box-zoom drag underneath) — actually
+     committing the resulting position change also needs
+     `config.edits.shapePosition = true` on the chart itself, or the drag is
+     intercepted but never applied (grabbable, but doesn't move). See
+     Plotly's own shape reference: "`editable`... has no effect when the
+     older editable shapes mode is enabled via `config.editable` or
+     `config.edits.shapePosition`" — i.e. that broader config *is* the
+     "older editable shapes mode," and shape-level `editable` is really just
+     a narrower way to opt in to the same thing.
+  2. Separately, a shape whose `x0` exactly equals `x1` (or `y0` equals
+     `y1` — a perfectly vertical or horizontal line) hits a real plotly.js
+     hit-detection bug: editable dragging never engages at all, regardless
+     of the config above (confirmed via the R wrapper hitting the identical
+     underlying plotly.js code — ropensci/plotly#1532). A visually-
+     imperceptible slant (offset `x0`/`x1` by something like `1e-6`) sidesteps
+     it; read the position back out as the midpoint of `x0`/`x1`, not `x0`
+     alone, so the epsilon never surfaces downstream. See `gateBoundaryShapes`
+     in `TouchstonePlot.fs`.
+- **Plotly can silently replace a graph div's internal event emitter
+  (`gd._ev`), orphaning any listener bound with a "bind once ever" guard.**
+  Observed here specifically when a shape's presence changes the shapes
+  count (e.g. a gate first appearing) — the *div* stays the same DOM
+  element, but `_ev` becomes a new object, so a listener attached to the old
+  one goes silently dead with no error. The same thing happens when a chart
+  drawn while its `<details>` section was still collapsed (0×0) gets resized
+  on first expand (`Plotly.Plots.resize`) — a code path that doesn't go
+  through `renderChart` at all, so `renderChart`'s own rebind-every-render
+  never runs for it either. The robust pattern: rebind on *every* occasion
+  the emitter could plausibly have been replaced (every `renderChart` call
+  *and* every collapsible-section expand), calling `el.removeAllListeners(eventName)`
+  first so a render that *didn't* get a fresh emitter doesn't accumulate
+  duplicate listeners. Diagnosed by comparing a tagged marker on `gd._ev`
+  across renders and directly inspecting `gd._ev._events[eventName].length`
+  — real mouse/pointer drag gestures can't be simulated with synthetic
+  events (Plotly's drag handling needs trusted browser events), so this had
+  to be debugged via `gd.emit(...)`/`Plotly.relayout(...)` and listener
+  introspection instead of an actual click-and-drag.
 
 ## Performance
 
@@ -147,6 +201,18 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
 - **Simulating a click on a Plotly legend entry**: a synthetic click on the visible `.legend .traces`
   group doesn't trigger Plotly's own handler. Target the (invisible) `.legend .legendtoggle` hit-area
   element instead — that's what Plotly actually binds the click listener to.
+- **`gd.emit('plotly_relayout', {...})` only fires the notification — it doesn't mutate `gd.layout`
+  the way a real drag or an actual `Plotly.relayout(gd, {...})` call does.** Fine for testing a
+  listener's own logic in isolation (it still receives the event), but any assertion that reads
+  `gd.layout.shapes[...]` afterward to check "did the position actually change" needs the real
+  `Plotly.relayout(...)` call, not a bare `emit`, or it'll look like nothing happened when the listener
+  logic was actually fine — cost real debugging time chasing a "bug" that was really just this
+  distinction.
+- **A `<details>` section that starts collapsed needs to actually be opened before testing anything
+  inside it, including via `document.elementFromPoint`.** A collapsed section's content is 0×0/hidden,
+  so `getBoundingClientRect()` on an element inside it can still return a stale-looking but real
+  rectangle while `elementFromPoint` at that same rectangle's center returns nothing — the mismatch is
+  the tell that the section is actually still closed, not that click simulation is broken.
 - **Checking axis labels means reading `chartDiv.layout.xaxis.title`/`.yaxis.title` (and `xaxis2`,
   `yaxis2`, ... per subplot after `Chart.Grid`) live in the browser, not just reading the F# chart-
   building code.** A source-level read of `quadMulti` in `TouchstonePlot.fs` looked complete — each
