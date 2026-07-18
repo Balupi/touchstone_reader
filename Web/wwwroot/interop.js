@@ -362,8 +362,15 @@ window.touchstoneInterop = {
             const hiKey = 'shapes[' + hiIdx + '].x0';
             if (!(loKey in eventData) && !(hiKey in eventData)) return;
 
-            const lo = Math.max(0, loKey in eventData ? eventData[loKey] : shapes[loIdx].x0);
-            const hi = Math.max(0, hiKey in eventData ? eventData[hiKey] : shapes[hiIdx].x0);
+            // Midpoint of x0/x1, not x0 alone: gateBoundaryShapes
+            // (TouchstonePlot.fs) gives each line a tiny x0/x1 slant to
+            // sidestep a Plotly.js bug where a perfectly vertical line's
+            // editable dragging never engages at all — reading just x0
+            // would report a position off by that (invisible but nonzero)
+            // epsilon.
+            const midX = (s) => (s.x0 + s.x1) / 2;
+            const lo = Math.max(0, midX(shapes[loIdx]));
+            const hi = Math.max(0, midX(shapes[hiIdx]));
             window.touchstoneInterop._dotNetRef.invokeMethodAsync('OnTdrGateDragged', lo, hi);
         });
     },

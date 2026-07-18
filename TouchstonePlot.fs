@@ -897,15 +897,27 @@ let tdrOrder = [ (1, 1); (2, 2) ]
 /// through to the plot's own box-zoom drag underneath instead — width 6
 /// gives it a comfortably grabbable target. Dash (not Dot) at this width,
 /// since dots that size read as chunky blobs rather than a guide line.
+///
+/// X0/X1 are offset from `x` by a tiny, visually-imperceptible epsilon
+/// rather than both exactly `x`: a perfectly vertical (or horizontal) line
+/// shape hits a known Plotly.js hit-detection bug where editable dragging
+/// never actually engages — the cursor never changes and every click falls
+/// through to the plot's own zoom — regardless of `editable` or
+/// `config.edits.shapePosition` (surfaces identically through the R
+/// wrapper, see ropensci/plotly#1532; same underlying plotly.js drag code).
+/// A slight slant sidesteps it entirely. interop.js reads the midpoint of
+/// x0/x1 back out, so the epsilon never shows up in the reported gate value.
 let private gateBoundaryShapes (gateNs: (float * float) option) =
     match gateNs with
     | None -> []
     | Some(lo, hi) ->
+        let epsilon = 1e-6
+
         let vline x =
             Shape.init (
                 ShapeType = StyleParam.ShapeType.Line,
-                X0 = x,
-                X1 = x,
+                X0 = x - epsilon,
+                X1 = x + epsilon,
                 Y0 = 0.0,
                 Y1 = 1.0,
                 Xref = "x",
