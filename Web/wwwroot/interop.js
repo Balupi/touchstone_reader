@@ -225,13 +225,14 @@ window.touchstoneInterop = {
         });
     },
 
-    // Shared by the file-list swatch click and the legend-click handler
-    // below: flips `fileName`'s hidden state, fades its swatch to match,
-    // and propagates the new visibility to every currently-rendered chart
-    // via _setFileVisible/_hiddenFiles — the single source of truth both
-    // entry points drive, so either one hiding a file keeps it hidden
-    // everywhere (including charts not rendered yet) until either one
-    // un-hides it again.
+    // Flips `fileName`'s *global* hidden state (file-list swatch only),
+    // fades its swatch to match, and propagates to every currently-rendered
+    // chart via _setFileVisible/_hiddenFiles — the single source of truth
+    // for "hidden everywhere," so hiding it here keeps it hidden on every
+    // chart (including ones not rendered yet) until the swatch un-hides it
+    // again. Deliberately separate from the TDR-pair-local hiding below:
+    // the file list is meant to be the one *global* on/off switch, with
+    // each chart's own legend staying local to just that chart.
     _toggleFileHidden: function (fileName) {
         const nowHidden = !window.touchstoneInterop._hiddenFiles.has(fileName);
         if (nowHidden) {
@@ -244,25 +245,71 @@ window.touchstoneInterop = {
         window.touchstoneInterop._setFileVisible(fileName, !nowHidden);
     },
 
-    // Plotly's own default legend-click behavior only restyles the one
-    // chart the clicked legend belongs to — a file's traces on every other
-    // chart, and _hiddenFiles itself, never find out, so the hidden state
-    // doesn't survive that chart's next re-render (e.g. changing the TDR
-    // gate) and doesn't reach sibling charts (e.g. hiding a file via the
-    // TDR chart's own legend never hid it on Magnitude). Intercepting the
-    // click and routing it through the same _toggleFileHidden the swatch
-    // uses — returning false to cancel Plotly's own restyle — makes legend
-    // clicks behave identically to swatch clicks everywhere. Rebound on
+    // Filenames hidden via *either* chart-tdr's or chart-tdr-gated's own
+    // legend — a second, narrower layer than _hiddenFiles, scoped to just
+    // that pair (see _bindLegendClick). Re-applied alongside _hiddenFiles
+    // in renderChart so it survives that pair's own re-renders (e.g.
+    // dragging the TDR gate) the same way _hiddenFiles does for every
+    // chart, without leaking to Magnitude/Phase/Smith/Group Delay or
+    // touching the file-list swatch.
+    _tdrHiddenFiles: new Set(),
+
+    _applyTdrHiddenFiles: function (data) {
+        return data.map((trace) => {
+            const label = window.touchstoneInterop._fileLabelFor(trace.name);
+            if (label && window.touchstoneInterop._tdrHiddenFiles.has(label)) {
+                return Object.assign({}, trace, { visible: 'legendonly' });
+            }
+            return trace;
+        });
+    },
+
+    // Toggles `fileName` in _tdrHiddenFiles and restyles it on both
+    // chart-tdr and chart-tdr-gated (whichever are currently rendered) —
+    // never the file-list swatch or any other chart, unlike
+    // _toggleFileHidden. A global hide (_hiddenFiles) still applies on top
+    // of this regardless, via _applyHiddenFiles; this only ever adds
+    // additional, TDR-pair-scoped hiding, never removes a global one.
+    _toggleTdrPairFileHidden: function (fileName) {
+        const nowHidden = !window.touchstoneInterop._tdrHiddenFiles.has(fileName);
+        if (nowHidden) {
+            window.touchstoneInterop._tdrHiddenFiles.add(fileName);
+        } else {
+            window.touchstoneInterop._tdrHiddenFiles.delete(fileName);
+        }
+        ['chart-tdr', 'chart-tdr-gated'].forEach((divId) => {
+            const el = document.getElementById(divId);
+            if (!el || !el.data) return;
+
+            el.data.forEach((trace, idx) => {
+                if (window.touchstoneInterop._fileLabelFor(trace.name) === fileName) {
+                    Plotly.restyle(el, { visible: nowHidden ? 'legendonly' : true }, [idx]);
+                }
+            });
+        });
+    },
+
+    // Only chart-tdr and chart-tdr-gated get a legend-click override — a
+    // deliberate pair, not "every chart" like _hiddenFiles/the file-list
+    // swatch: they're one workflow (set the gate on the impedance view,
+    // read the result on the gated one) sharing S11/S22 selection and gate
+    // state already, so keeping a file hidden across *just* that pair when
+    // toggled from either one's legend matches how tightly coupled they
+    // already are. Every other chart's legend is left to Plotly's own
+    // default (chart-local, not synced anywhere) behavior — the file-list
+    // swatch is the one "hide everywhere" control, on purpose. Rebound on
     // every render rather than once: Plotly replaces a graph div's internal
     // event emitter on some react() calls (see _bindTdrGateDrag), which
     // would otherwise orphan this listener the same way it did there.
     _bindLegendClick: function (divId) {
+        if (divId !== 'chart-tdr' && divId !== 'chart-tdr-gated') return;
+
         const el = document.getElementById(divId);
         el.removeAllListeners('plotly_legendclick');
         el.on('plotly_legendclick', function (eventData) {
             const trace = eventData.data[eventData.curveNumber];
             const fileName = window.touchstoneInterop._fileLabelFor(trace.name);
-            if (fileName) window.touchstoneInterop._toggleFileHidden(fileName);
+            if (fileName) window.touchstoneInterop._toggleTdrPairFileHidden(fileName);
             return false;
         });
     },
@@ -358,6 +405,9 @@ window.touchstoneInterop = {
         const fig = JSON.parse(figureJson);
         fig.data = window.touchstoneInterop._dedupeLegendByFile(fig.data);
         fig.data = window.touchstoneInterop._applyHiddenFiles(fig.data);
+        if (divId === 'chart-tdr' || divId === 'chart-tdr-gated') {
+            fig.data = window.touchstoneInterop._applyTdrHiddenFiles(fig.data);
+        }
         window.touchstoneInterop._lastFigures[divId] = fig;
         // Plotly.react diffs against the existing plot and patches it in place
         // instead of tearing down and rebuilding the whole chart like newPlot.
