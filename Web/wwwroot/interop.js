@@ -7,11 +7,45 @@ window.touchstoneInterop = {
         const el = document.getElementById(elementId);
         if (!el) return;
 
-        const readFile = (file) => {
+        const readFile = (file, displayName) => {
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = () => dotNetRef.invokeMethodAsync('OnFileDropped', file.name, reader.result);
+            reader.onload = () => dotNetRef.invokeMethodAsync('OnFileDropped', displayName || file.name, reader.result);
             reader.readAsText(file);
+        };
+
+        const looksLikeTouchstone = (name) => /\.s\d+p$/i.test(name);
+
+        // Recursively walks a dropped folder's FileSystemDirectoryEntry,
+        // reading every Touchstone-looking file it finds — including in
+        // subfolders — with its path relative to the dropped folder as the
+        // display name (e.g. "sub/device1.s2p"), so same-named files from
+        // different subfolders don't collide and it's clear where each one
+        // came from. Files that don't look like Touchstone data are skipped
+        // here, unlike a direct file drop (which still attempts to parse
+        // anything dropped and shows the real parse error): a folder can
+        // easily contain a lot of unrelated files, and running all of them
+        // through the parser would just spam error notifications for files
+        // nobody meant to load.
+        const walkDirectory = (dirEntry, relativePath) => {
+            const reader = dirEntry.createReader();
+            // readEntries only returns one batch per call (browsers commonly
+            // cap it around 100) — keep calling until it returns empty.
+            const readNextBatch = () => {
+                reader.readEntries((entries) => {
+                    if (entries.length === 0) return;
+                    entries.forEach((child) => {
+                        const childPath = relativePath + '/' + child.name;
+                        if (child.isDirectory) {
+                            walkDirectory(child, childPath);
+                        } else if (looksLikeTouchstone(child.name)) {
+                            child.file((file) => readFile(file, childPath));
+                        }
+                    });
+                    readNextBatch();
+                });
+            };
+            readNextBatch();
         };
 
         el.addEventListener('dragover', (e) => {
@@ -22,12 +56,36 @@ window.touchstoneInterop = {
         el.addEventListener('drop', (e) => {
             e.preventDefault();
             el.classList.remove('is-dragover');
-            Array.from(e.dataTransfer.files).forEach(readFile);
+
+            const items = e.dataTransfer.items;
+            // webkitGetAsEntry (despite the name, supported by every major
+            // browser) is what lets a dropped *folder* be told apart from an
+            // empty file and actually walked — dataTransfer.files alone
+            // flattens a folder into a single, content-less pseudo-file that
+            // just fails to parse. Must be read synchronously here, before
+            // any await: dataTransfer stops being valid once this handler
+            // returns.
+            if (items && items.length > 0 && typeof items[0].webkitGetAsEntry === 'function') {
+                Array.from(items).forEach((item) => {
+                    const entry = item.webkitGetAsEntry();
+                    if (!entry) return;
+                    if (entry.isDirectory) {
+                        walkDirectory(entry, entry.name);
+                    } else {
+                        entry.file((file) => readFile(file));
+                    }
+                });
+            } else {
+                // Fallback for browsers without webkitGetAsEntry: unchanged
+                // prior behavior — a dropped folder comes through as an
+                // empty pseudo-file and fails to parse with a clear error.
+                Array.from(e.dataTransfer.files).forEach((file) => readFile(file));
+            }
         });
 
         const input = el.querySelector('input[type=file]');
         if (input) {
-            input.addEventListener('change', (e) => Array.from(e.target.files).forEach(readFile));
+            input.addEventListener('change', (e) => Array.from(e.target.files).forEach((file) => readFile(file)));
         }
     },
 

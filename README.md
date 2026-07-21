@@ -25,7 +25,10 @@ and drop one or more Touchstone files onto. Everything runs client-side (Blazor
 WebAssembly via [Bolero](https://fsbolero.io), Elmish architecture, Bulma
 styling) — files are parsed in the browser and never uploaded anywhere. Drop
 several files at once to overlay them for comparison; each can be removed
-individually.
+individually. Dropping a folder searches it (including subfolders) for
+Touchstone-looking files and loads each one found, named with its path
+relative to the dropped folder (e.g. `sub/device1.s2p`) so files with the
+same name in different subfolders don't collide.
 
 ### Files
 
