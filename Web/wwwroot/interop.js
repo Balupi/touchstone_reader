@@ -115,13 +115,13 @@ window.touchstoneInterop = {
     // redraw already-rendered charts without needing new data from .NET.
     _lastFigures: {},
 
-    // Print-style export: white paper, black grid/axes/text, black curves
-    // thicker than the gridlines. Traces with showlegend === false are the
-    // Smith chart's background resistance/reactance circles (drawn as plain
-    // traces, not real Plotly gridlines) — kept grid-thin instead of
-    // data-thick so they don't become indistinguishable from the actual S11/
-    // S22 curve.
-    _monochromeLayout: function (layout) {
+    // Print-style export: white paper, black grid/axes/text — JPEG has no
+    // alpha channel, so a transparent/dark-mode background would otherwise
+    // export as black regardless of on-screen theme. Trace colors are left
+    // as-is (see _printData): files stay distinguishable in the export the
+    // same way they are on screen, by color, rather than being flattened
+    // to black.
+    _printLayout: function (layout) {
         layout = window.touchstoneInterop._makeResponsive(layout)
         layout = Object.assign({}, layout, {
             paper_bgcolor: '#ffffff',
@@ -139,12 +139,6 @@ window.touchstoneInterop = {
         return layout;
     },
 
-    // On screen, color alone (touchstoneInterop.fileColor in TouchstonePlot.fs)
-    // is enough to tell files apart. The print/monochrome export flattens
-    // every line to black, so files need a second cue there — a per-file
-    // dash pattern, assigned only for this export and never shown on screen.
-    _dashCycle: ['solid', 'dot', 'dash', 'dashdot', 'longdash', 'longdashdot'],
-
     // Trace names are built in TouchstonePlot.fs as "<filename> <Param><i><j>"
     // (e.g. "deviceA.s2p S11") — strips that known "<Letter><digits>" suffix
     // to recover the filename, which is otherwise not attached to the trace
@@ -155,17 +149,6 @@ window.touchstoneInterop = {
         if (!traceName) return '';
         const match = traceName.match(/^(.*)\s[A-Za-z]\d+$/);
         return match ? match[1] : traceName;
-    },
-
-    _fileDashFor: function (traceName) {
-        const label = window.touchstoneInterop._fileLabelFor(traceName);
-        if (!label) return 'solid';
-        let h = 0;
-        for (let i = 0; i < label.length; i++) {
-            h = (h * 31 + label.charCodeAt(i)) | 0;
-        }
-        const cycle = window.touchstoneInterop._dashCycle;
-        return cycle[((h % cycle.length) + cycle.length) % cycle.length];
     },
 
     // Collapses each file's several per-parameter traces (e.g. "deviceA.s2p
@@ -314,18 +297,27 @@ window.touchstoneInterop = {
         });
     },
 
-    _monochromeData: function (data) {
+    // Widens each trace for legibility once printed/exported (thin on-screen
+    // lines can look faint on paper); color is left untouched, unlike the
+    // black-flattened export this replaced. Grid lines (the Smith chart's
+    // background resistance/reactance circles, drawn as plain traces with
+    // no name) are kept thin instead of data-thick, so they don't become
+    // indistinguishable from the actual S11/S22 curve — identified by
+    // having no file label, *not* by showlegend === false: since
+    // _dedupeLegendByFile, every file's non-first parameter trace (e.g.
+    // S21 once S11 already represents that file in the legend) also has
+    // showlegend === false despite being real data, not a grid line.
+    _printData: function (data) {
         return data.map((trace) => {
-            const isGridLine = trace.showlegend === false;
-            const dash = isGridLine ? trace.line && trace.line.dash : window.touchstoneInterop._fileDashFor(trace.name);
+            const isGridLine = !window.touchstoneInterop._fileLabelFor(trace.name);
             return Object.assign({}, trace, {
-                line: Object.assign({}, trace.line, { color: '#000000', width: isGridLine ? 1 : 2.5, dash: dash }),
+                line: Object.assign({}, trace.line, { width: isGridLine ? 1 : 2.5 }),
             });
         });
     },
 
     // JPEG has no alpha channel, so a transparent/dark-mode background would
-    // export as black. Swap the whole chart to a monochrome print-style
+    // export as black. Swap the whole chart to a white-background print-style
     // figure just for the download, then swap back — replaces the default
     // camera button since its own download path always captures the current
     // on-screen colors as-is.
@@ -373,9 +365,9 @@ window.touchstoneInterop = {
                     icon: Plotly.Icons.camera,
                     click: function (gd) {
                         const fig = window.touchstoneInterop._lastFigures[divId];
-                        const monoLayout = window.touchstoneInterop._monochromeLayout(fig.layout);
-                        const monoData = window.touchstoneInterop._monochromeData(fig.data);
-                        Plotly.react(divId, monoData, monoLayout, window.touchstoneInterop._config(divId))
+                        const printLayout = window.touchstoneInterop._printLayout(fig.layout);
+                        const printData = window.touchstoneInterop._printData(fig.data);
+                        Plotly.react(divId, printData, printLayout, window.touchstoneInterop._config(divId))
                             .then(() => Plotly.downloadImage(gd, { format: 'jpeg', filename: divId }))
                             .then(() =>
                                 Plotly.react(

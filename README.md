@@ -90,9 +90,8 @@ A status line reports parsing/rendering progress, and large sweeps (into the
 thousands of points) are downsampled per trace via Largest-Triangle-Three-
 Buckets before charting, so the page stays responsive without losing narrow
 resonances or notches. Charts follow the browser's light/dark theme; the
-download button on each chart always exports a black-on-white print-style
-JPEG regardless of the on-screen theme, with a distinct dash pattern per
-file so they stay distinguishable once color is gone.
+download button on each chart always exports a white-background print-style
+JPEG regardless of the on-screen theme, keeping each file's own color.
 
 ### Deploy to GitHub Pages
 
