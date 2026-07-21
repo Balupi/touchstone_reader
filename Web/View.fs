@@ -431,6 +431,35 @@ let private tdrGatedSubSection (isOpenByDefault: bool) (divId: string) =
         div { attr.id divId }
     }
 
+/// Collapsible sub-section nested inside the Smith Chart section, holding
+/// just the VSWR chart — shares Smith's own S11/S22 selection instead of
+/// duplicating a second toggle row for the same parameters (they're the
+/// same reflection-coefficient data, just a different view of it: a complex
+/// trajectory vs. a frequency-domain scalar). `extraControls` renders
+/// between the CSV button and the chart, e.g. VSWR's own min/max toggle —
+/// Smith itself has none, a 2D trajectory has no single meaningful extremum.
+let private vswrSubSection (isOpenByDefault: bool) (extraControls: Node) (divId: string) =
+    details {
+        attr.``class`` "chart-section mt-4"
+
+        if isOpenByDefault then attr.``open`` true else attr.empty ()
+
+        summary {
+            attr.``class`` "title is-6"
+            attr.style "cursor: pointer;"
+            "VSWR"
+        }
+
+        div {
+            attr.``class`` "field is-grouped mb-3"
+            csvDownloadButton divId
+        }
+
+        extraControls
+
+        div { attr.id divId }
+    }
+
 /// Absolute-vs-deviation-from-mean switch for the Group Delay section; only
 /// meaningful (and shown) once 2+ files are actually comparable. Styled as a
 /// single connected (`has-addons`) segmented control behind a "Display:"
@@ -795,7 +824,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 (empty ())
                                 "max-width: 700px; margin: 0 auto;"
                                 "chart-smith"
-                                (empty ())
+                                (vswrSubSection false (extremaToggle dispatch VswrChart model.ShowVswrExtrema) "chart-vswr")
 
                         if has2Port then
                             let comparableCount = ok |> List.filter (fun (_, data) -> data.Ports = 2) |> List.length

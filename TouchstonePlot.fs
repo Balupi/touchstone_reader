@@ -458,6 +458,62 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
 
             Some { Chart = chart; Csv = fun () -> toCsv "Re(Γ)" "Im(Γ)" series }
 
+/// VSWR (dimensionless, >= 1) from a reflection coefficient's magnitude:
+/// (1+|Γ|)/(1-|Γ|). 1.0 is a perfect match; higher is worse.
+let private vswrSeries (i: int) (data: TouchstoneFile) =
+    data.Matrices
+    |> Array.map (fun m ->
+        let mag = m.[i, i].Magnitude
+        (1.0 + mag) / (1.0 - mag))
+
+let private vswrTrace (label: string) (i: int) (data: TouchstoneFile) =
+    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+    let vswr = vswrSeries i data
+    let points = Array.zip freqGHz vswr |> lttb maxPointsPerTrace
+    let name = (sprintf "%s S%d%d" label i i).Trim()
+    styledLine label name (points |> Array.map fst) (points |> Array.map snd)
+
+/// VSWR vs frequency (GHz) of the selected reflection coefficients (e.g.
+/// `[ (1,1); (2,2) ]` for S11+S22) of several labeled S-parameter files —
+/// the frequency-domain scalar counterpart to the Smith chart's complex
+/// trajectory, and the reflection-quality metric reached for more often
+/// than Return Loss in some conventions (which the Magnitude (dB) chart
+/// already shows numerically for S11/S22, just not sign-flipped/labeled as
+/// such). Optionally annotated with the global min/max across all loaded
+/// files. Returns None if `selected` is empty or none of the files are
+/// S-parameter data.
+let vswrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (string * TouchstoneFile) list) =
+    if selected.IsEmpty then
+        None
+    else
+        let sFiles = files |> List.filter (fun (_, data) -> data.Option.Parameter = S)
+
+        if sFiles.IsEmpty then
+            None
+        else
+            let series =
+                [ for (label, data) in sFiles do
+                    for (i, j) in selected do
+                        if i = j && i <= data.Ports then
+                            let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+                            (sprintf "%s S%d%d" label i i).Trim(), freqGHz, vswrSeries i data ]
+
+            let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "" series else [], []
+
+            let chart =
+                sFiles
+                |> List.collect (fun (label, data) ->
+                    selected
+                    |> List.choose (fun (i, j) -> if i = j && i <= data.Ports then Some(vswrTrace label i data) else None))
+                |> Chart.combine
+                |> Chart.withTitle "VSWR"
+                |> Chart.withXAxisStyle "Frequency (GHz)"
+                |> Chart.withYAxisStyle "VSWR"
+                |> Chart.withShapes shapes
+                |> Chart.withAnnotations annotations
+
+            Some { Chart = chart; Csv = fun () -> toCsv "Frequency (GHz)" "VSWR" series }
+
 /// Unwraps a sequence of angles (radians) so consecutive jumps greater than
 /// π get folded by ±2π, producing a continuous curve. Raw S-parameter phase
 /// wraps at ±180°; differentiating it unwrapped would produce spurious

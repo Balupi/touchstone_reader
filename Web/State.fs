@@ -32,6 +32,7 @@ type ChartKind =
     | SmithChart
     | GroupDelayChart
     | TdrChart
+    | VswrChart
 
 /// Show each file's absolute curve, or (only meaningful with 2+ files) its
 /// deviation from the pointwise mean across the loaded files.
@@ -50,6 +51,12 @@ type Model =
       ShowMagnitudeExtrema: bool
       ShowGroupDelayExtrema: bool
       ShowTdrExtrema: bool
+      /// VSWR (nested under the Smith Chart section) shares SmithSelected
+      /// rather than having its own — the two are the same S11/S22 data,
+      /// just a complex trajectory vs. a frequency-domain scalar — but
+      /// keeps its own extrema-marker visibility, since Smith itself has
+      /// none (a 2D trajectory has no single meaningful min/max).
+      ShowVswrExtrema: bool
       /// Savitzky-Golay smoothing of the group delay curves (both display
       /// modes) — off by default, since it's not the raw measured data.
       SmoothGroupDelay: bool
@@ -76,6 +83,7 @@ let initModel =
       ShowMagnitudeExtrema = true
       ShowGroupDelayExtrema = true
       ShowTdrExtrema = true
+      ShowVswrExtrema = true
       SmoothGroupDelay = false
       TdrGateNs = None
       TdrGateGen = 0
@@ -137,10 +145,12 @@ let update message model =
         | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
         | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
         | TdrChart -> { model with TdrSelected = toggle model.TdrSelected }
+        | VswrChart -> model
     | SetGroupDelayMode mode -> { model with GroupDelayMode = mode }
     | SetShowExtrema(MagnitudeChart, show) -> { model with ShowMagnitudeExtrema = show }
     | SetShowExtrema(GroupDelayChart, show) -> { model with ShowGroupDelayExtrema = show }
     | SetShowExtrema(TdrChart, show) -> { model with ShowTdrExtrema = show }
+    | SetShowExtrema(VswrChart, show) -> { model with ShowVswrExtrema = show }
     | SetShowExtrema(_, _) -> model
     | SetSmoothGroupDelay smooth -> { model with SmoothGroupDelay = smooth }
     | SetTdrGate(loNs, hiNs) ->

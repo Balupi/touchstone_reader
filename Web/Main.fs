@@ -20,6 +20,7 @@ type App() =
     let mutable lastGroupDelayKey: string option = None
     let mutable lastTdrKey: string option = None
     let mutable lastTdrGatedKey: string option = None
+    let mutable lastVswrKey: string option = None
     // Guards against the render triggered by our own SetStatus dispatch
     // re-entering this method (Blazor calls OnAfterRenderAsync after every
     // render) and racing to redo or prematurely clear the same work.
@@ -112,6 +113,7 @@ type App() =
                     let showTdrExtrema = currentModel.ShowTdrExtrema
                     let smoothGd = currentModel.SmoothGroupDelay
                     let tdrGateNs = currentModel.TdrGateNs
+                    let showVswrExtrema = currentModel.ShowVswrExtrema
 
                     Some
                         {| Ok = ok
@@ -126,12 +128,14 @@ type App() =
                            ShowTdrExtrema = showTdrExtrema
                            SmoothGd = smoothGd
                            TdrGateNs = tdrGateNs
+                           ShowVswrExtrema = showVswrExtrema
                            MagKey = keyOf magSelected + "##" + string showMagExtrema
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
                            GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema + "##" + string smoothGd
                            TdrKey = keyOf tdrSelected + "##" + string showTdrExtrema + "##" + string tdrGateNs
-                           TdrGatedKey = keyOf tdrSelected + "##" + string tdrGateNs |}
+                           TdrGatedKey = keyOf tdrSelected + "##" + string tdrGateNs
+                           VswrKey = keyOf smithSelected + "##" + string showVswrExtrema |}
 
             if not isRendering then
                 match pendingWork () with
@@ -142,6 +146,7 @@ type App() =
                     lastGroupDelayKey <- None
                     lastTdrKey <- None
                     lastTdrGatedKey <- None
+                    lastVswrKey <- None
                     lastCsvThunks <- Map.empty
 
                     if currentModel.Status.IsSome then
@@ -153,6 +158,7 @@ type App() =
                     && lastGroupDelayKey = Some w.GdKey
                     && lastTdrKey = Some w.TdrKey
                     && lastTdrGatedKey = Some w.TdrGatedKey
+                    && lastVswrKey = Some w.VswrKey
                     ->
                     if currentModel.Status.IsSome then
                         this.Dispatch(SetStatus None)
@@ -179,12 +185,14 @@ type App() =
                         let needsGroupDelay = lastGroupDelayKey <> Some w.GdKey
                         let needsTdr = lastTdrKey <> Some w.TdrKey
                         let needsTdrGated = lastTdrGatedKey <> Some w.TdrGatedKey
+                        let needsVswr = lastVswrKey <> Some w.VswrKey
                         lastMagnitudeKey <- Some w.MagKey
                         lastPhaseKey <- Some w.PhaseKey
                         lastSmithKey <- Some w.SmithKey
                         lastGroupDelayKey <- Some w.GdKey
                         lastTdrKey <- Some w.TdrKey
                         lastTdrGatedKey <- Some w.TdrGatedKey
+                        lastVswrKey <- Some w.VswrKey
 
                         let render (divId: string) (result: ChartResult) : Task =
                             lastCsvThunks <- lastCsvThunks |> Map.add divId result.Csv
@@ -227,6 +235,11 @@ type App() =
                         if needsTdrGated then
                             match tdrGatedChartMulti w.TdrGateNs w.TdrSelected w.Ok with
                             | Some result -> do! render "chart-tdr-gated" result
+                            | None -> ()
+
+                        if needsVswr then
+                            match vswrChartMulti w.ShowVswrExtrema w.SmithSelected w.Ok with
+                            | Some result -> do! render "chart-vswr" result
                             | None -> ()
 
                     this.Dispatch(SetStatus None)

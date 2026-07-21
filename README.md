@@ -55,7 +55,11 @@ by default) scoped to what it can show:
   VNA-style quad grid. The grid's reserved footprint stays constant
   regardless of selection, so fewer selected parameters stretch to fill it
   instead of shrinking the page layout.
-- **Smith Chart** — S11/S22 (the reflection coefficients).
+- **Smith Chart** — S11/S22 (the reflection coefficients). Its own nested,
+  independently-collapsible **VSWR** sub-section plots the same reflection
+  coefficients' magnitude as `(1+|Γ|)/(1-|Γ|)` against frequency instead —
+  a frequency-domain scalar reading of the same data the Smith chart already
+  shows as a complex trajectory.
 - **Group Delay (ns)** — S21/S12 (the transmission coefficients),
   `-1/(2π) · dφ/df` with the phase unwrapped first. Switchable between each
   file's absolute curve and its deviation from the pointwise mean across all
@@ -79,9 +83,9 @@ by default) scoped to what it can show:
   others sharing the same line. Ungated (the default) it reproduces the
   ordinary S11/S22 magnitude as a sanity check.
 
-Magnitude, Group Delay, and TDR can each show a min/max reference line (with
-the value labeled at the axis) for the global extreme across every loaded
-file, toggled independently per section. Every chart's legend shows one
+Magnitude, Group Delay, TDR, and VSWR can each show a min/max reference line
+(with the value labeled at the axis) for the global extreme across every
+loaded file, toggled independently per section. Every chart's legend shows one
 entry per file (not one per parameter); every chart has a CSV-export button
 (full-precision, not the downsampled display data) next to its parameter
 toggles, in addition to the same option in Plotly's own toolbar.
