@@ -143,6 +143,10 @@ Line Design Handbook*. Warnings are printed when the geometry leaves the
 approximations' validity range. The math lives in `Stripline.fs` (pure, no
 dependencies), usable as a library via `TouchstoneReader.Stripline.impedance`.
 
+The same calculator is built into the web frontend as its own collapsible
+section (below the drop zone, independent of any loaded files), so it also
+works in the browser on tablets and phones via the GitHub Pages deployment.
+
 ## Coverage
 
 - Legacy v1.x: any `.sNp`, comment lines (`!`), option line (`#`), `DB`/`MA`/`RI`,

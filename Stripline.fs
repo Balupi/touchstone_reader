@@ -108,21 +108,29 @@ let impedance (g: Geometry) : Result<ImpedanceResult, string> =
 let widthForImpedance (g: Geometry) (targetZ0: float) : Result<float, string> =
     if targetZ0 <= 0.0 then Error "target impedance must be positive" else
     let b = g.Height1 + g.Height2 + g.Thickness
-    let z w =
-        match impedance { g with Width = w } with
-        | Ok r -> r.Z0
-        | Error e -> failwith e
-    // Below w ~ t the narrow-strip thickness correction is invalid (and can
-    // even go negative), so don't search there.
-    let wLo, wHi = max (1e-3 * b) g.Thickness, 100.0 * b
-    if z wLo < targetZ0 then
-        Error (sprintf "target %.1f ohm is too high for this geometry (max ~%.1f ohm)" targetZ0 (z wLo))
-    elif z wHi > targetZ0 then
-        Error (sprintf "target %.1f ohm is too low for this geometry (min ~%.1f ohm)" targetZ0 (z wHi))
-    else
-        let rec bisect lo hi n =
-            let mid = (lo + hi) / 2.0
-            if n = 0 then mid
-            elif z mid > targetZ0 then bisect mid hi (n - 1)
-            else bisect lo mid (n - 1)
-        Ok (bisect wLo wHi 60)
+    // Probe the rest of the geometry (heights, thickness, er) with a known-
+    // good width first, so an invalid input surfaces as an Error here rather
+    // than an exception out of the bisection closure below.
+    match impedance { g with Width = max b 1.0 } with
+    | Error e -> Error e
+    | Ok _ ->
+        let z w =
+            match impedance { g with Width = w } with
+            | Ok r -> r.Z0
+            | Error e -> failwith e
+        // Below w ~ t the narrow-strip thickness correction is invalid (and
+        // can even go negative), so don't search there.
+        let wLo, wHi = max (1e-3 * b) g.Thickness, 100.0 * b
+
+        if z wLo < targetZ0 then
+            Error (sprintf "target %.1f ohm is too high for this geometry (max ~%.1f ohm)" targetZ0 (z wLo))
+        elif z wHi > targetZ0 then
+            Error (sprintf "target %.1f ohm is too low for this geometry (min ~%.1f ohm)" targetZ0 (z wHi))
+        else
+            let rec bisect lo hi n =
+                let mid = (lo + hi) / 2.0
+                if n = 0 then mid
+                elif z mid > targetZ0 then bisect mid hi (n - 1)
+                else bisect lo mid (n - 1)
+
+            Ok (bisect wLo wHi 60)

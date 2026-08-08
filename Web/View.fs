@@ -6,6 +6,7 @@ open System.Globalization
 open Bolero
 open Bolero.Html
 open Elmish
+open TouchstoneReader
 open TouchstoneReader.Touchstone
 open TouchstoneReader.TouchstonePlot
 open TouchstoneReader.Web.State
@@ -670,6 +671,163 @@ let private tdrGateSlider (dispatch: Dispatch<Message>) (gateNs: (float * float)
             }
         }
 
+/// One labeled input row of the stripline calculator. `keySuffix` feeds
+/// attr.key so the solver overwriting w forces element replacement (see
+/// StriplineInputs.Gen); the other fields pass a constant. Commit on change
+/// (blur/enter), matching the frequency-range inputs — with the raw string
+/// stored as-is, what's rendered always round-trips what was typed.
+let private striplineInputRow
+    (dispatch: Dispatch<Message>)
+    (labelText: string)
+    (field: StriplineField)
+    (value: string)
+    (keySuffix: string)
+    =
+    div {
+        attr.``class`` "is-flex is-align-items-center mb-2"
+
+        p {
+            attr.``class`` "is-size-7 has-text-grey mr-2"
+            attr.style "width: 16rem;"
+            labelText
+        }
+
+        input {
+            attr.key (sprintf "stripline-%s" keySuffix)
+            attr.``class`` "input is-small"
+            attr.style "width: 6rem;"
+            attr.``type`` "number"
+            attr.step "any"
+            attr.value value
+            on.change (fun e -> dispatch (SetStriplineField(field, string e.Value)))
+        }
+    }
+
+/// Impedance and per-unit-length line parameters for the current inputs,
+/// recomputed on every render — the whole calculation is a handful of
+/// closed-form evaluations, nowhere near the downsample-and-replot work the
+/// charts have to gate behind caching.
+let private striplineResults (s: StriplineInputs) =
+    match striplineGeometry s with
+    | None ->
+        p {
+            attr.``class`` "has-text-grey mt-3"
+            "Enter numeric values for w, t, h1, h2 and εr."
+        }
+    | Some g ->
+        match Stripline.impedance g with
+        | Error e ->
+            p {
+                attr.``class`` "has-text-danger mt-3"
+                e
+            }
+        | Ok r ->
+            concat {
+                nav {
+                    attr.``class`` "level mt-4 mb-2"
+
+                    let cells =
+                        [ "Z₀", sprintf "%.2f Ω" r.Z0
+                          "Delay", sprintf "%.3f ns/m" r.DelayNsPerM
+                          "C′", sprintf "%.1f pF/m" r.CapacitancePfPerM
+                          "L′", sprintf "%.1f nH/m" r.InductanceNhPerM ]
+
+                    for heading, value in cells do
+                        div {
+                            attr.``class`` "level-item has-text-centered"
+
+                            div {
+                                p {
+                                    attr.``class`` "heading"
+                                    heading
+                                }
+
+                                p {
+                                    attr.``class`` "title is-4"
+                                    value
+                                }
+                            }
+                        }
+                }
+
+                for w in r.Warnings do
+                    p {
+                        attr.``class`` "is-size-7 has-text-warning-dark"
+                        sprintf "⚠ %s" w
+                    }
+            }
+
+/// Standalone asymmetric-stripline impedance calculator (Stripline.fs at the
+/// repo root) — independent of any loaded Touchstone files, so it renders
+/// whether or not files are loaded. Deliberately not `chart-section`: that
+/// class opts a <details> into interop.js's Plotly-resize-on-expand handler,
+/// and there's no chart in here.
+let private striplineSection (model: Model) (dispatch: Dispatch<Message>) =
+    let s = model.Stripline
+
+    details {
+        attr.``class`` "box mt-4"
+        attr.``open`` true
+
+        summary {
+            attr.``class`` "title is-5"
+            attr.style "cursor: pointer;"
+            "Stripline Impedance Calculator"
+        }
+
+        p {
+            attr.``class`` "is-size-7 has-text-grey mt-2 mb-3"
+
+            "Asymmetric (offset) stripline: a trace of width w and thickness t between two ground planes, "
+            + "separated from them by dielectric heights h1 and h2. Any consistent length unit — only the ratios matter."
+        }
+
+        striplineInputRow dispatch "w — trace width" StriplineW s.W (sprintf "w-%d" s.Gen)
+        striplineInputRow dispatch "t — trace thickness" StriplineT s.T "t"
+        striplineInputRow dispatch "h1 — dielectric to one ground plane" StriplineH1 s.H1 "h1"
+        striplineInputRow dispatch "h2 — dielectric to the other plane" StriplineH2 s.H2 "h2"
+        striplineInputRow dispatch "εr — relative permittivity" StriplineEr s.Er "er"
+
+        striplineResults s
+
+        div {
+            attr.``class`` "is-flex is-align-items-center mt-3"
+
+            p {
+                attr.``class`` "is-size-7 has-text-grey mr-2"
+                "Target Z₀:"
+            }
+
+            input {
+                attr.``class`` "input is-small"
+                attr.style "width: 6rem;"
+                attr.``type`` "number"
+                attr.step "any"
+                attr.value s.TargetZ0
+                on.change (fun e -> dispatch (SetStriplineField(StriplineTargetZ0, string e.Value)))
+            }
+
+            p {
+                attr.``class`` "mx-2 is-size-7 has-text-grey"
+                "Ω"
+            }
+
+            button {
+                attr.``class`` "button is-small is-info"
+                on.click (fun _ -> dispatch SolveStriplineWidth)
+                "Solve width"
+            }
+        }
+
+        match s.SolveError with
+        | Some e ->
+            p {
+                attr.``class`` "is-size-7 has-text-danger mt-2"
+                e
+            }
+        | None -> empty ()
+    }
+
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
         attr.``class`` "container mt-5 px-4"
@@ -866,4 +1024,6 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                 (tdrGatedSubSection false "chart-tdr-gated")
                     }
             }
+
+        striplineSection model dispatch
     }
