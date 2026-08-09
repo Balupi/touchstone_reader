@@ -124,28 +124,24 @@ smithChart data |> Chart.show      // S-parameters only: Sii on a Smith grid
 
 ## Stripline impedance calculator
 
-```
-dotnet run --project Stripline/Stripline.fsproj -- --w 0.2 --t 0.035 --h1 0.3 --h2 0.5 --er 4.3
-```
-
-Computes the characteristic impedance (plus delay, C' and L' per meter) of an
-asymmetric (offset) stripline: a trace of width `--w` and thickness `--t`
-between two ground planes, separated from them by dielectric heights `--h1`
-and `--h2` (relative permittivity `--er`). Lengths can be in any consistent
-unit — only the ratios matter. Pass `--target <ohm>` instead of `--w` to solve
-for the width that hits a given impedance.
+The web frontend includes a stripline calculator as its own collapsible
+section (below the drop zone, independent of any loaded files), so it also
+works in the browser on tablets and phones via the GitHub Pages deployment.
+It computes the characteristic impedance (plus delay, C' and L' per meter)
+of an asymmetric (offset) stripline: a trace of width `w` and thickness `t`
+between two ground planes, separated from them by dielectric heights `h1`
+and `h2` (relative permittivity `εr`). Lengths can be in any consistent
+unit — only the ratios matter. It can also solve for the width that hits a
+target impedance.
 
 Method: Cohn's symmetric-stripline solution (exact elliptic-integral form for
 zero thickness, his narrow/wide-strip corrections for finite thickness), with
 the offset handled as the parallel combination of the two symmetric
 half-structures (spacings `2·h1+t` and `2·h2+t`) as in Wadell's *Transmission
-Line Design Handbook*. Warnings are printed when the geometry leaves the
+Line Design Handbook*. Warnings are shown when the geometry leaves the
 approximations' validity range. The math lives in `Stripline.fs` (pure, no
-dependencies), usable as a library via `TouchstoneReader.Stripline.impedance`.
-
-The same calculator is built into the web frontend as its own collapsible
-section (below the drop zone, independent of any loaded files), so it also
-works in the browser on tablets and phones via the GitHub Pages deployment.
+dependencies), usable as a library via `TouchstoneReader.Stripline.impedance`
+and `widthForImpedance`.
 
 ## Coverage
 
