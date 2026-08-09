@@ -124,15 +124,19 @@ smithChart data |> Chart.show      // S-parameters only: Sii on a Smith grid
 
 ## Stripline impedance calculator
 
-The web frontend includes a stripline calculator as its own collapsible
-section (below the drop zone, independent of any loaded files), so it also
-works in the browser on tablets and phones via the GitHub Pages deployment.
-It computes the characteristic impedance (plus delay, C' and L' per meter)
-of an asymmetric (offset) stripline: a trace of width `w` and thickness `t`
-between two ground planes, separated from them by dielectric heights `h1`
-and `h2` (relative permittivity `εr`). Lengths can be in any consistent
-unit — only the ratios matter. It can also solve for the width that hits a
-target impedance.
+```
+dotnet run --project StriplineCalc/StriplineCalc.fsproj
+```
+
+A separate, standalone Bolero web app (`StriplineCalc/`), deployed alongside
+the Touchstone frontend at `https://<owner>.github.io/<repo>/stripline/`, so
+it also works in the browser on tablets and phones. It computes the
+characteristic impedance (plus delay, C' and L' per meter) of an asymmetric
+(offset) stripline: a trace of width `w` and thickness `t` between two
+ground planes, separated from them by dielectric heights `h1` and `h2`
+(relative permittivity `εr`). Lengths can be in any consistent unit — only
+the ratios matter. It can also solve for the width that hits a target
+impedance.
 
 Method: Cohn's symmetric-stripline solution (exact elliptic-integral form for
 zero thickness, his narrow/wide-strip corrections for finite thickness), with

@@ -5,8 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Touchstone.fs" />
-    <Compile Include="..\TouchstonePlot.fs" />
+    <Compile Include="..\Stripline.fs" />
     <Compile Include="State.fs" />
     <Compile Include="View.fs" />
     <Compile Include="Main.fs" />
@@ -14,7 +13,6 @@
 
   <ItemGroup>
     <PackageReference Include="Bolero" Version="0.24.39" />
-    <PackageReference Include="Plotly.NET" Version="4.2.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
 

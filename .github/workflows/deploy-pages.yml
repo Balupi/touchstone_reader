@@ -29,11 +29,21 @@ jobs:
       - name: Publish
         run: dotnet publish Web/TouchstoneReader.Web.fsproj -c Release -o publish
 
-      # GitHub Pages serves a project site at /<repo>/, not /, so the SPA's
+      # The standalone stripline calculator is a second, independent Bolero
+      # app served from a subfolder of the same Pages site (…/stripline/).
+      - name: Publish stripline calculator
+        run: |
+          dotnet publish StriplineCalc/StriplineCalc.fsproj -c Release -o publish-stripline
+          mkdir -p publish/wwwroot/stripline
+          cp -r publish-stripline/wwwroot/. publish/wwwroot/stripline/
+
+      # GitHub Pages serves a project site at /<repo>/, not /, so each SPA's
       # base href (used to resolve every relative asset, including the WASM
-      # runtime under _framework/) has to match that subpath.
-      - name: Fix base href for the project-site subpath
-        run: sed -i 's|<base href="/" />|<base href="/${{ github.event.repository.name }}/" />|' publish/wwwroot/index.html
+      # runtime under _framework/) has to match its subpath.
+      - name: Fix base hrefs for the project-site subpath
+        run: |
+          sed -i 's|<base href="/" />|<base href="/${{ github.event.repository.name }}/" />|' publish/wwwroot/index.html
+          sed -i 's|<base href="/" />|<base href="/${{ github.event.repository.name }}/stripline/" />|' publish/wwwroot/stripline/index.html
 
       # Without this, GitHub Pages' Jekyll processing silently drops the
       # _framework/ folder (leading underscore), breaking the app.

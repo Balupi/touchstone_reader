@@ -3,4 +3,5 @@
     <Project Path="Web/TouchstoneReader.Web.fsproj" />
   </Folder>
   <Project Path="TouchstoneReader.fsproj" />
+  <Project Path="StriplineCalc/StriplineCalc.fsproj" />
 </Solution>

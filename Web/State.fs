@@ -1,7 +1,6 @@
 /// Elmish model, messages, and update function for the Touchstone web app.
 module TouchstoneReader.Web.State
 
-open TouchstoneReader
 open TouchstoneReader.Touchstone
 open TouchstoneReader.TouchstonePlot
 
@@ -25,43 +24,6 @@ type LoadedFile =
       /// out of the group without affecting the rest. Default true, so
       /// multiple files start out synced.
       FreqRangeLinked: bool }
-
-/// Which input of the stripline calculator a SetStriplineField applies to.
-type StriplineField =
-    | StriplineW
-    | StriplineT
-    | StriplineH1
-    | StriplineH2
-    | StriplineEr
-    | StriplineTargetZ0
-
-/// Stripline-calculator inputs, kept as the raw typed strings rather than
-/// parsed floats: what's rendered then always equals what's in the live DOM,
-/// sidestepping the whole stale-input-after-transform class of Blazor
-/// diffing bugs (see LoadedFile.FreqRangeGen). Parsing happens on use, in
-/// striplineGeometry / the solver.
-type StriplineInputs =
-    { W: string
-      T: string
-      H1: string
-      H2: string
-      Er: string
-      TargetZ0: string
-      /// Bumped when the solver overwrites W — View.fs keys the w input on
-      /// it, same stale-DOM-value fix as LoadedFile.FreqRangeGen.
-      Gen: int
-      /// Feedback from the last SolveStriplineWidth, cleared on any edit.
-      SolveError: string option }
-
-let initStripline =
-    { W = "0.2"
-      T = "0.035"
-      H1 = "0.3"
-      H2 = "0.5"
-      Er = "4.3"
-      TargetZ0 = "50"
-      Gen = 0
-      SolveError = None }
 
 /// Which collapsible section a ToggleParam message applies to.
 type ChartKind =
@@ -106,7 +68,6 @@ type Model =
       /// Bumped on every SetTdrGate/ResetTdrGate — same stale-DOM-value fix
       /// as LoadedFile.FreqRangeGen, applied to the gate's number inputs.
       TdrGateGen: int
-      Stripline: StriplineInputs
       Status: string option }
 
 let initModel =
@@ -126,7 +87,6 @@ let initModel =
       SmoothGroupDelay = false
       TdrGateNs = None
       TdrGateGen = 0
-      Stripline = initStripline
       Status = None }
 
 type Message =
@@ -144,22 +104,7 @@ type Message =
     | SetFreqRange of fileName: string * loGHz: float * hiGHz: float
     | ResetFreqRange of fileName: string
     | SetFreqRangeLinked of fileName: string * linked: bool
-    | SetStriplineField of field: StriplineField * value: string
-    | SolveStriplineWidth
     | SetStatus of string option
-
-let private tryFloat (s: string) =
-    match System.Double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture) with
-    | true, v -> Some v
-    | false, _ -> None
-
-/// The calculator's geometry, if every input currently parses as a number —
-/// View.fs computes and shows the impedance from this on each render.
-let striplineGeometry (s: StriplineInputs) : Stripline.Geometry option =
-    match tryFloat s.W, tryFloat s.T, tryFloat s.H1, tryFloat s.H2, tryFloat s.Er with
-    | Some w, Some t, Some h1, Some h2, Some er ->
-        Some { Width = w; Thickness = t; Height1 = h1; Height2 = h2; Er = er }
-    | _ -> None
 
 let update message model =
     match message with
@@ -186,9 +131,7 @@ let update message model =
         { model with Files = files }
     | RemoveFile fileName ->
         { model with Files = model.Files |> List.filter (fun f -> f.FileName <> fileName) }
-    // Keeps the stripline calculator's inputs: it's independent of the
-    // loaded files, so clearing those shouldn't wipe a geometry mid-use.
-    | ClearFiles -> { initModel with Stripline = model.Stripline }
+    | ClearFiles -> initModel
     | ToggleParam(chart, i, j) ->
         let toggle (selected: Set<int * int>) =
             if selected.Contains(i, j) then
@@ -257,42 +200,6 @@ let update message model =
             Files =
                 model.Files
                 |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeLinked = linked } else f) }
-    | SetStriplineField(field, value) ->
-        let s = model.Stripline
-
-        let s =
-            match field with
-            | StriplineW -> { s with W = value }
-            | StriplineT -> { s with T = value }
-            | StriplineH1 -> { s with H1 = value }
-            | StriplineH2 -> { s with H2 = value }
-            | StriplineEr -> { s with Er = value }
-            | StriplineTargetZ0 -> { s with TargetZ0 = value }
-
-        { model with Stripline = { s with SolveError = None } }
-    | SolveStriplineWidth ->
-        let s = model.Stripline
-
-        let solved =
-            match tryFloat s.T, tryFloat s.H1, tryFloat s.H2, tryFloat s.Er, tryFloat s.TargetZ0 with
-            | Some t, Some h1, Some h2, Some er, Some target ->
-                // Width is what's being solved for, so a non-numeric w field
-                // doesn't block the solve; 1.0 is just a placeholder.
-                let g: Stripline.Geometry =
-                    { Width = 1.0; Thickness = t; Height1 = h1; Height2 = h2; Er = er }
-
-                Stripline.widthForImpedance g target
-            | _ -> Error "t, h1, h2, εr and target Z₀ must all be numbers"
-
-        match solved with
-        | Ok w ->
-            { model with
-                Stripline =
-                    { s with
-                        W = w.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)
-                        Gen = s.Gen + 1
-                        SolveError = None } }
-        | Error e -> { model with Stripline = { s with SolveError = Some e } }
     | SetStatus status -> { model with Status = status }
 
 /// The Ok files, paired with their filename for use as an overlay chart
