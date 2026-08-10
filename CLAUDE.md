@@ -1,25 +1,49 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with code in this repository, and — since it's
-meant to carry forward into a follow-up project — with Bolero/Blazor WASM F# projects in general.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository,
+and — since it's meant to carry forward into a follow-up project — with Bolero/Blazor WASM F# projects
+in general.
 
 **How to read this file**: the first sections are specific to what this project actually is (a CLI +
-a Bolero/Blazor WebAssembly frontend sharing pure F# domain code) and are hard-won from building it.
+two Bolero/Blazor WebAssembly apps sharing pure F# domain code) and are hard-won from building it.
 The last section, "General F# conventions", is a trimmed-down carryover of a wider team template that
 mostly does **not** apply here (no API layer, no database, no test suite) — keep it as reference for
 if a follow-up project grows one of those, don't apply it speculatively to this one.
 
+## Commands
+
+No test suite and no separate linter — `dotnet build` (and its warnings) plus actually running the
+apps is the whole development loop.
+
+- CLI: `dotnet run -- path/to/file.s2p`
+- Touchstone web app: `dotnet run --project Web/TouchstoneReader.Web.fsproj` — dev server on
+  `http://localhost:5000` (this is also the `web` configuration in `.claude/launch.json`, used by the
+  preview tooling).
+- Stripline calculator app: `dotnet run --project StriplineCalc/StriplineCalc.fsproj`
+- Everything at once: `dotnet build TouchstoneReader.slnx`
+
 ## Project shape
 
+Three apps, no shared-library project — the pure domain `.fs` files at the repo root are linked into
+each consumer via `<Compile Include="..\Touchstone.fs" />`-style entries in the `.fsproj`; small,
+dependency-light files don't need that ceremony. `TouchstoneReader.slnx` ties the projects together.
+
 - `Touchstone.fs` / `TouchstonePlot.fs` at the repo root: pure F#, no UI dependencies. Parses Touchstone
-  RF files and builds Plotly.NET charts. Shared between the CLI and the web frontend via
-  `<Compile Include="..\Touchstone.fs" />`-style linking in the `.fsproj`, not a separate shared-library
-  project — small, dependency-light files don't need that ceremony.
+  RF files and builds Plotly.NET charts. Shared between the CLI and the Touchstone web frontend.
+- `Stripline.fs` / `StriplineFdm.fs` at the repo root: pure F#, no dependencies at all. Closed-form
+  asymmetric-stripline impedance (Cohn's symmetric solution, offset handled per Wadell as the parallel
+  combination of the two symmetric half-structures; two dielectrics combined via capacitance-weighted
+  effective permittivity) and a 2D electrostatic finite-difference solver that numerically cross-checks
+  it. Shared into the stripline calculator app.
 - CLI (`TouchstoneReader.fsproj`, net10.0): thin wrapper, opens charts in the system browser via
   `Chart.show`.
 - Web (`Web/TouchstoneReader.Web.fsproj`, net8.0 — capped by Bolero's latest dependency group, not a
   free choice): Bolero (Elmish-on-Blazor-WebAssembly), split into `State.fs` (Model/Message/update),
   `View.fs` (Bolero.Html view tree), `Main.fs` (the `ProgramComponent` + JS interop glue).
+- Stripline calculator (`StriplineCalc/StriplineCalc.fsproj`, net8.0): a second, fully independent
+  Bolero app with the same `State.fs`/`View.fs`/`Main.fs` split — no Plotly, no interop.js, no code
+  dependency on the Touchstone app; it shares only `Stripline*.fs`. Deployed alongside the main app
+  under `/stripline/` (see Workflow below).
 - `Web/wwwroot/interop.js`: the non-Elmish escape hatch — anything that has to touch Plotly.js directly
   (rendering, theming, CSV/image download) lives here, called via `IJSRuntime.InvokeVoidAsync` /
   `[<JSInvokable>]`.
@@ -42,7 +66,11 @@ else entirely.
   rendered value" and skips updating the DOM — even though the browser's live input still shows
   whatever the user actually typed. Fix: key the input on something that changes on every commit (a
   per-item generation counter), forcing element replacement instead of a patch. See
-  `LoadedFile.FreqRangeGen` / `attr.key` usage in `Web/View.fs`.
+  `LoadedFile.FreqRangeGen` / `attr.key` usage in `Web/View.fs`. The stripline calculator sidesteps
+  the whole class a different way: its model keeps every input as the raw typed string (parsed on
+  use), so what's rendered always equals what's in the live DOM — see `StriplineCalc/State.fs`,
+  which still needs the generation-counter trick (`Model.Gen`) for the one case where the *solver*
+  overwrites an input.
 - **DOM diffing can wipe out externally-injected content.** Plotly.js draws directly into a `<div>`
   Blazor doesn't know about. If a *sibling* element is conditionally inserted/removed (e.g. a status
   banner appearing above the chart), Blazor's diff can shift/repatch the chart's div and Plotly's
@@ -187,8 +215,11 @@ else entirely.
 
 ## Testing / verification
 
-No automated test suite exists yet (no Expecto, no test project). Verification for the web frontend has
-been entirely through the Preview MCP tools: drag-and-drop synthetic and real files via `preview_eval`,
+No automated test suite exists yet (no Expecto, no test project). The stripline math is the exception
+to "no verification story": `StriplineFdm.fs` is a from-first-principles numerical cross-check of the
+closed forms in `Stripline.fs`, validated to <0.1 % against Cohn's exact solution, and exposed in-app
+as the "Verify numerically (FDM)" button. Verification for the web frontends has otherwise been
+entirely through the Preview MCP tools: drag-and-drop synthetic and real files via `preview_eval`,
 then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`. Notes for next time:
 
 - `preview_eval` has a hard ~30s timeout — for WASM work that can legitimately take longer (large real
@@ -226,13 +257,17 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
 
 ## Workflow
 
-- Work happens on the `web-frontend` branch; `main` is the original CLI-only history.
+- `web-frontend` is the default branch and where work happens.
 - **Never commit without being explicitly asked** ("commit it") — held for every single feature across
   this whole project, no exceptions made.
 - Claude does not push — the user pushes themselves after reviewing.
 - Commit messages explain *why*, not *what* — the diff already shows what changed.
-- Deploy is automatic: `.github/workflows/deploy-pages.yml` builds and publishes to GitHub Pages on
-  every push to `web-frontend`.
+- Deploy is automatic: `.github/workflows/deploy-pages.yml` publishes **both** web apps to GitHub Pages
+  on every push to `web-frontend` — the Touchstone app at the site root, the stripline calculator
+  copied into `wwwroot/stripline/`. Two Pages-specific fixups live in the workflow and are load-bearing:
+  each SPA's `<base href>` is rewritten to its project-site subpath (`/<repo>/`, `/<repo>/stripline/`),
+  and a `.nojekyll` file stops GitHub's Jekyll processing from silently dropping the `_framework/`
+  folder (leading underscore) that the WASM runtime lives in.
 
 ## Worth understanding before extending this further
 
@@ -309,6 +344,18 @@ A few concepts that came up and are worth being comfortable with, not just patte
   time-domain/frequency-domain round trip reuses a windowed intermediate built for a *different*,
   one-directional purpose, check whether that window's effect actually survives being transformed back —
   it usually does, silently.
+- **A finite-difference grid must land exactly on material boundaries, or the geometry error swamps
+  the discretization error.** In `StriplineFdm.fs`, naive uniform-grid rasterization of a thin trace
+  put several percent of *geometry* error into the capacitance — and worse, an error that jumped
+  between resolutions instead of extrapolating away, defeating Richardson extrapolation entirely. The
+  fix is a tensor-product grid built from per-axis zones whose boundaries sit exactly on the conductor
+  faces and the dielectric interface; only then does solving at two resolutions and Richardson-
+  extrapolating work, with the spread between them doubling as an honest grid-uncertainty estimate.
+- **Expensive numeric solves in interpreted WASM should be on-demand, not live.** The FDM verification
+  (four Laplace solves, seconds each under the interpreter) runs on a button press and is invalidated
+  by any input edit (`FdmState` in `StriplineCalc/State.fs`) — recomputing it on every keystroke like
+  the cheap closed-form result would freeze the UI. Same underlying reality as the Performance section
+  above; this is the interaction-design consequence.
 
 ---
 
