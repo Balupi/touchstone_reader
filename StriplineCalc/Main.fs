@@ -9,7 +9,8 @@ open StriplineCalc.View
 type App() =
     inherit ProgramComponent<Model, Message>()
 
-    override this.Program = Program.mkSimple (fun _ -> initModel) update renderView
+    override this.Program =
+        Program.mkProgram (fun _ -> initModel, Cmd.none) update renderView
 
 [<EntryPoint>]
 let main args =

@@ -3,6 +3,7 @@
 /// Stripline.fs at the repo root (TouchstoneReader.Stripline).
 module StriplineCalc.State
 
+open Elmish
 open TouchstoneReader
 
 /// Which input a SetField message applies to.
@@ -14,6 +15,15 @@ type Field =
     | FieldEr1
     | FieldEr2
     | FieldTargetZ0
+
+/// State of the on-demand numerical (FDM) verification. Not recomputed
+/// live: four Laplace solves take seconds under interpreted WASM, so it
+/// runs on a button press and is invalidated by any input edit.
+type FdmState =
+    | FdmIdle
+    | FdmRunning
+    | FdmDone of StriplineFdm.FdmResult
+    | FdmFailed of string
 
 /// Inputs kept as the raw typed strings rather than parsed floats: what's
 /// rendered then always equals what's in the live DOM, sidestepping the
@@ -33,7 +43,8 @@ type Model =
       /// equal what the input already displays.
       Gen: int
       /// Feedback from the last SolveWidth, cleared on any edit.
-      SolveError: string option }
+      SolveError: string option
+      Fdm: FdmState }
 
 let initModel =
     { W = "0.2"
@@ -44,11 +55,14 @@ let initModel =
       Er2 = "4.3"
       TargetZ0 = "50"
       Gen = 0
-      SolveError = None }
+      SolveError = None
+      Fdm = FdmIdle }
 
 type Message =
     | SetField of field: Field * value: string
     | SolveWidth
+    | RunFdm
+    | FdmFinished of Result<StriplineFdm.FdmResult, string>
 
 let private tryFloat (s: string) =
     match System.Double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture) with
@@ -76,7 +90,9 @@ let update message model =
             | FieldEr2 -> { model with Er2 = value }
             | FieldTargetZ0 -> { model with TargetZ0 = value }
 
-        { m with SolveError = None }
+        // Any edit invalidates a previous numerical result along with any
+        // stale solver feedback.
+        { m with SolveError = None; Fdm = FdmIdle }, Cmd.none
     | SolveWidth ->
         let solved =
             match tryFloat model.T, tryFloat model.H1, tryFloat model.H2, tryFloat model.Er1, tryFloat model.Er2, tryFloat model.TargetZ0 with
@@ -94,5 +110,23 @@ let update message model =
             { model with
                 W = w.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)
                 Gen = model.Gen + 1
-                SolveError = None }
-        | Error e -> { model with SolveError = Some e }
+                SolveError = None
+                Fdm = FdmIdle },
+            Cmd.none
+        | Error e -> { model with SolveError = Some e }, Cmd.none
+    | RunFdm ->
+        match geometry model with
+        | None -> { model with Fdm = FdmFailed "w, t, h1, h2, εr1 and εr2 must all be numbers" }, Cmd.none
+        | Some g ->
+            let run () =
+                task {
+                    // WASM is single-threaded: without yielding here, the
+                    // browser never paints the "solving…" state before the
+                    // solver blocks the thread.
+                    do! System.Threading.Tasks.Task.Delay 30
+                    return StriplineFdm.solve g
+                }
+
+            { model with Fdm = FdmRunning }, Cmd.OfTask.perform run () FdmFinished
+    | FdmFinished(Ok r) -> { model with Fdm = FdmDone r }, Cmd.none
+    | FdmFinished(Error e) -> { model with Fdm = FdmFailed e }, Cmd.none

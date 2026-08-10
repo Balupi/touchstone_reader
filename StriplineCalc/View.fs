@@ -131,6 +131,47 @@ let private solverRow (m: Model) (dispatch: Dispatch<Message>) =
         | None -> empty ()
     }
 
+/// On-demand numerical verification: a button that runs the FDM solver
+/// (a few seconds under interpreted WASM, hence not live) and the outcome,
+/// compared against the closed-form result shown above.
+let private fdmRow (m: Model) (dispatch: Dispatch<Message>) =
+    concat {
+        div {
+            attr.``class`` "is-flex is-align-items-center mt-4"
+
+            button {
+                attr.``class`` "button is-small"
+                attr.disabled (m.Fdm = FdmRunning)
+                on.click (fun _ -> dispatch RunFdm)
+                "Verify numerically (FDM)"
+            }
+        }
+
+        match m.Fdm with
+        | FdmIdle -> empty ()
+        | FdmRunning ->
+            p {
+                attr.``class`` "is-size-7 has-text-grey mt-2"
+                "Solving Laplace on the cross-section… this can take a few seconds in the browser."
+            }
+        | FdmFailed e ->
+            p {
+                attr.``class`` "is-size-7 has-text-danger mt-2"
+                e
+            }
+        | FdmDone r ->
+            let deviation =
+                match geometry m |> Option.map Stripline.impedance with
+                | Some(Ok a) -> sprintf " — closed form deviates by %+.1f %%" ((a.Z0 - r.Z0) / r.Z0 * 100.0)
+                | _ -> ""
+
+            p {
+                attr.``class`` "is-size-7 mt-2"
+
+                sprintf "FDM: Z₀ = %.2f Ω, εeff = %.2f (grid ±%.1f %%)%s" r.Z0 r.EffectiveEr r.GridUncertaintyPct deviation
+            }
+    }
+
 let renderView (model: Model) (dispatch: Dispatch<Message>) =
     div {
         attr.``class`` "container mt-5 px-4"
@@ -161,6 +202,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
 
             results model
             solverRow model dispatch
+            fdmRow model dispatch
         }
 
         p {
@@ -168,6 +210,8 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
 
             "Method: Cohn's symmetric-stripline solution (exact elliptic-integral form at t = 0, narrow/wide-strip "
             + "thickness corrections otherwise), with the offset handled as the parallel combination of the two "
-            + "symmetric half-structures (spacings 2·h1+t and 2·h2+t), per Wadell's Transmission Line Design Handbook."
+            + "symmetric half-structures (spacings 2·h1+t and 2·h2+t), per Wadell's Transmission Line Design Handbook. "
+            + "The FDM verification solves Laplace's equation on the cross-section directly (geometry-snapped grid, "
+            + "two resolutions, Richardson-extrapolated) and has none of the closed form's validity limits."
         }
     }

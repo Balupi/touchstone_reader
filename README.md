@@ -149,6 +149,16 @@ approximations' validity range. The math lives in `Stripline.fs` (pure, no
 dependencies), usable as a library via `TouchstoneReader.Stripline.impedance`
 and `widthForImpedance`.
 
+A "Verify numerically (FDM)" button cross-checks the closed form with a
+2D electrostatic finite-difference solve of the actual cross-section
+(`StriplineFdm.fs`): box-integration stencil on a tensor grid whose lines
+land exactly on the conductor faces and dielectric interface, SOR iteration,
+capacitance from the field energy, two resolutions Richardson-extrapolated
+with the grid spread reported as an uncertainty estimate. Validated to
+&lt;0.1 % against Cohn's exact solution; it has none of the closed form's
+validity limits, so it's the better answer for strongly asymmetric or
+high-contrast geometries (a few seconds per solve under interpreted WASM).
+
 ## Coverage
 
 - Legacy v1.x: any `.sNp`, comment lines (`!`), option line (`#`), `DB`/`MA`/`RI`,
