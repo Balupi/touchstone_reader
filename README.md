@@ -133,10 +133,12 @@ the Touchstone frontend at `https://<owner>.github.io/<repo>/stripline/`, so
 it also works in the browser on tablets and phones. It computes the
 characteristic impedance (plus delay, C' and L' per meter) of an asymmetric
 (offset) stripline: a trace of width `w` and thickness `t` between two
-ground planes, separated from them by dielectric heights `h1` and `h2`
-(relative permittivity `εr`). Lengths can be in any consistent unit — only
-the ratios matter. It can also solve for the width that hits a target
-impedance.
+ground planes, separated from them by dielectric heights `h1` and `h2`, each
+side with its own relative permittivity (`εr1`/`εr2`, e.g. core vs.
+prepreg — a capacitance-weighted effective permittivity combines them, and
+εeff is shown alongside the results). Lengths can be in any consistent
+unit — only the ratios matter. It can also solve for the width that hits a
+target impedance.
 
 Method: Cohn's symmetric-stripline solution (exact elliptic-integral form for
 zero thickness, his narrow/wide-strip corrections for finite thickness), with

@@ -1,8 +1,11 @@
 module TouchstoneReader.Stripline
 
 // Characteristic impedance of an asymmetric (offset) stripline: a trace of
-// width w and thickness t embedded in a homogeneous dielectric (er) between
-// two ground planes, at distance h1 from one plane and h2 from the other.
+// width w and thickness t between two ground planes, at distance h1 from one
+// plane and h2 from the other. The two sides may have different dielectrics
+// (er1 above h1, er2 above h2 — e.g. core vs. prepreg); each side is treated
+// as a homogeneous region and combined via a capacitance-weighted effective
+// permittivity (see `impedance`).
 //
 // All lengths are in the same arbitrary unit — the impedance depends only on
 // ratios, so mm, mil, µm all work as long as they're consistent.
@@ -21,10 +24,12 @@ type Geometry =
       Thickness: float      // t: trace (metal) thickness
       Height1: float        // h1: dielectric between trace and one ground plane
       Height2: float        // h2: dielectric between trace and the other plane
-      Er: float }           // relative permittivity of the dielectric
+      Er1: float            // relative permittivity of the h1-side dielectric
+      Er2: float }          // relative permittivity of the h2-side dielectric
 
 type ImpedanceResult =
     { Z0: float                     // characteristic impedance, ohm
+      EffectiveEr: float            // capacitance-weighted effective permittivity
       DelayNsPerM: float            // propagation delay, ns/m
       CapacitancePfPerM: float      // C', pF/m
       InductanceNhPerM: float       // L', nH/m
@@ -80,7 +85,10 @@ let private validityWarnings (g: Geometry) =
           sprintf "t/w = %.2f exceeds 1; the narrow-strip thickness correction is outside its validity range" (g.Thickness / g.Width)
       let ratio = max (g.Height1 / g.Height2) (g.Height2 / g.Height1)
       if ratio > 5.0 then
-          sprintf "h1/h2 asymmetry of %.1f:1 is strong; the parallel-combination model degrades" ratio ]
+          sprintf "h1/h2 asymmetry of %.1f:1 is strong; the parallel-combination model degrades" ratio
+      let erRatio = max (g.Er1 / g.Er2) (g.Er2 / g.Er1)
+      if erRatio > 3.0 then
+          sprintf "er1/er2 contrast of %.1f:1 is strong; the two-region mixing model is approximate" erRatio ]
 
 /// Characteristic impedance and per-unit-length line parameters of an
 /// asymmetric stripline. Returns Error for a non-physical geometry.
@@ -89,15 +97,24 @@ let impedance (g: Geometry) : Result<ImpedanceResult, string> =
         Error "width, h1 and h2 must all be positive"
     elif g.Thickness < 0.0 then
         Error "thickness must be zero or positive"
-    elif g.Er < 1.0 then
-        Error "relative permittivity must be >= 1"
+    elif g.Er1 < 1.0 || g.Er2 < 1.0 then
+        Error "relative permittivities must be >= 1"
     else
-        let z1 = zSym g.Er g.Width (2.0 * g.Height1 + g.Thickness) g.Thickness
-        let z2 = zSym g.Er g.Width (2.0 * g.Height2 + g.Thickness) g.Thickness
-        let z0 = 2.0 * z1 * z2 / (z1 + z2)
-        let sqrtEr = sqrt g.Er
+        // Each half-structure is treated as its own homogeneous region: its
+        // air-line capacitance scales as 1/Z_air, and filling it with er_i
+        // multiplies just that half's capacitance by er_i. The line's
+        // effective permittivity is then the capacitance-weighted average of
+        // the two, and Z0 = Z0_air / sqrt(erEff) — which collapses to the
+        // plain homogeneous result whenever er1 = er2.
+        let z1a = zSym 1.0 g.Width (2.0 * g.Height1 + g.Thickness) g.Thickness
+        let z2a = zSym 1.0 g.Width (2.0 * g.Height2 + g.Thickness) g.Thickness
+        let zAir = 2.0 * z1a * z2a / (z1a + z2a)
+        let erEff = (g.Er1 / z1a + g.Er2 / z2a) / (1.0 / z1a + 1.0 / z2a)
+        let z0 = zAir / sqrt erEff
+        let sqrtEr = sqrt erEff
         Ok
             { Z0 = z0
+              EffectiveEr = erEff
               DelayNsPerM = sqrtEr / c0 * 1e9
               CapacitancePfPerM = sqrtEr / (c0 * z0) * 1e12
               InductanceNhPerM = z0 * sqrtEr / c0 * 1e9

@@ -11,7 +11,8 @@ type Field =
     | FieldT
     | FieldH1
     | FieldH2
-    | FieldEr
+    | FieldEr1
+    | FieldEr2
     | FieldTargetZ0
 
 /// Inputs kept as the raw typed strings rather than parsed floats: what's
@@ -24,7 +25,8 @@ type Model =
       T: string
       H1: string
       H2: string
-      Er: string
+      Er1: string
+      Er2: string
       TargetZ0: string
       /// Bumped when the solver overwrites W — View.fs keys the w input on
       /// it, forcing element replacement even if the solved width happens to
@@ -38,7 +40,8 @@ let initModel =
       T = "0.035"
       H1 = "0.3"
       H2 = "0.5"
-      Er = "4.3"
+      Er1 = "4.3"
+      Er2 = "4.3"
       TargetZ0 = "50"
       Gen = 0
       SolveError = None }
@@ -55,9 +58,9 @@ let private tryFloat (s: string) =
 /// The geometry, if every input currently parses as a number — View.fs
 /// computes and shows the impedance from this on each render.
 let geometry (m: Model) : Stripline.Geometry option =
-    match tryFloat m.W, tryFloat m.T, tryFloat m.H1, tryFloat m.H2, tryFloat m.Er with
-    | Some w, Some t, Some h1, Some h2, Some er ->
-        Some { Width = w; Thickness = t; Height1 = h1; Height2 = h2; Er = er }
+    match tryFloat m.W, tryFloat m.T, tryFloat m.H1, tryFloat m.H2, tryFloat m.Er1, tryFloat m.Er2 with
+    | Some w, Some t, Some h1, Some h2, Some er1, Some er2 ->
+        Some { Width = w; Thickness = t; Height1 = h1; Height2 = h2; Er1 = er1; Er2 = er2 }
     | _ -> None
 
 let update message model =
@@ -69,21 +72,22 @@ let update message model =
             | FieldT -> { model with T = value }
             | FieldH1 -> { model with H1 = value }
             | FieldH2 -> { model with H2 = value }
-            | FieldEr -> { model with Er = value }
+            | FieldEr1 -> { model with Er1 = value }
+            | FieldEr2 -> { model with Er2 = value }
             | FieldTargetZ0 -> { model with TargetZ0 = value }
 
         { m with SolveError = None }
     | SolveWidth ->
         let solved =
-            match tryFloat model.T, tryFloat model.H1, tryFloat model.H2, tryFloat model.Er, tryFloat model.TargetZ0 with
-            | Some t, Some h1, Some h2, Some er, Some target ->
+            match tryFloat model.T, tryFloat model.H1, tryFloat model.H2, tryFloat model.Er1, tryFloat model.Er2, tryFloat model.TargetZ0 with
+            | Some t, Some h1, Some h2, Some er1, Some er2, Some target ->
                 // Width is what's being solved for, so a non-numeric w field
                 // doesn't block the solve; 1.0 is just a placeholder.
                 let g: Stripline.Geometry =
-                    { Width = 1.0; Thickness = t; Height1 = h1; Height2 = h2; Er = er }
+                    { Width = 1.0; Thickness = t; Height1 = h1; Height2 = h2; Er1 = er1; Er2 = er2 }
 
                 Stripline.widthForImpedance g target
-            | _ -> Error "t, h1, h2, εr and target Z₀ must all be numbers"
+            | _ -> Error "t, h1, h2, εr1, εr2 and target Z₀ must all be numbers"
 
         match solved with
         | Ok w ->

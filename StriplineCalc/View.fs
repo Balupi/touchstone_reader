@@ -45,7 +45,7 @@ let private results (m: Model) =
     | None ->
         p {
             attr.``class`` "has-text-grey mt-3"
-            "Enter numeric values for w, t, h1, h2 and εr."
+            "Enter numeric values for w, t, h1, h2, εr1 and εr2."
         }
     | Some g ->
         match Stripline.impedance g with
@@ -61,6 +61,7 @@ let private results (m: Model) =
 
                     let cells =
                         [ "Z₀", sprintf "%.2f Ω" r.Z0
+                          "εeff", sprintf "%.2f" r.EffectiveEr
                           "Delay", sprintf "%.3f ns/m" r.DelayNsPerM
                           "C′", sprintf "%.1f pF/m" r.CapacitancePfPerM
                           "L′", sprintf "%.1f nH/m" r.InductanceNhPerM ]
@@ -144,7 +145,8 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
             attr.``class`` "subtitle is-6"
 
             "Asymmetric (offset) stripline: a trace of width w and thickness t between two ground planes, "
-            + "separated from them by dielectric heights h1 and h2. Any consistent length unit — only the ratios matter."
+            + "separated from them by dielectric heights h1 and h2 with their own permittivities εr1 and εr2 "
+            + "(e.g. core vs. prepreg). Any consistent length unit — only the ratios matter."
         }
 
         div {
@@ -153,8 +155,9 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
             inputRow dispatch "w — trace width" FieldW model.W (sprintf "w-%d" model.Gen)
             inputRow dispatch "t — trace thickness" FieldT model.T "t"
             inputRow dispatch "h1 — dielectric to one ground plane" FieldH1 model.H1 "h1"
+            inputRow dispatch "εr1 — permittivity on the h1 side" FieldEr1 model.Er1 "er1"
             inputRow dispatch "h2 — dielectric to the other plane" FieldH2 model.H2 "h2"
-            inputRow dispatch "εr — relative permittivity" FieldEr model.Er "er"
+            inputRow dispatch "εr2 — permittivity on the h2 side" FieldEr2 model.Er2 "er2"
 
             results model
             solverRow model dispatch
