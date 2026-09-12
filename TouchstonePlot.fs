@@ -225,13 +225,37 @@ let private extremumMarkers (xref: string) (yref: string) (unit: string) (series
 /// One line trace for Sij (or Yij/Zij/...) of one file, `toY` picking the
 /// scalar to plot from each complex value. `label` (e.g. a filename) is
 /// prepended to the trace name when overlaying multiple files; pass "" for none.
-let private oneParamTrace (label: string) (toY: Complex -> float) (i: int) (j: int) (data: TouchstoneFile) =
-    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-    let ys = data.Matrices |> Array.map (fun m -> toY m.[i, j])
-    let points = Array.zip freqGHz ys |> lttb maxPointsPerTrace
-    let name = sprintf "%A%d%d" data.Option.Parameter i j
-    let name = if label = "" then name else sprintf "%s %s" label name
+/// A line trace from an already-extracted (x, y) series: lttb-downsample,
+/// then hand the result to styledLine. Keeping this separate from the
+/// extraction is what lets the *ChartMulti functions - which need the
+/// full-resolution series anyway, for CSV export and the min/max markers -
+/// draw from the series they already have instead of computing it a second
+/// time. Group delay is the case that motivated it (a whole unwrap +
+/// derivative + optional Savitzky-Golay pass per call, ~1.4 ms per series
+/// on an 11,000-point file natively, doubled across every file and every
+/// selected parameter on every redraw), but the parameter, VSWR and Smith
+/// charts were all paying the same duplication.
+let private traceOfSeries (label: string) (name: string) (xs: float[]) (ys: float[]) =
+    let points = Array.zip xs ys |> lttb maxPointsPerTrace
     styledLine label name (points |> Array.map fst) (points |> Array.map snd)
+
+/// Frequency (GHz) and the scalar `toY` picks out, for one Sij of one file,
+/// at full resolution.
+let private paramSeries (toY: Complex -> float) (i: int) (j: int) (data: TouchstoneFile) =
+    data.Frequencies |> Array.map (fun f -> f / 1e9), data.Matrices |> Array.map (fun m -> toY m.[i, j])
+
+/// Trace name for one Sij (or Yij/Zij/...): the file's own parameter letter,
+/// prefixed with the file label when several files are overlaid. Note this
+/// is deliberately *not* the naming the CSV/extrema series lists use - those
+/// spell the parameter "S" unconditionally. Both spellings are kept as they
+/// were; unifying them would change existing exports.
+let private paramTraceName (label: string) (i: int) (j: int) (data: TouchstoneFile) =
+    let name = sprintf "%A%d%d" data.Option.Parameter i j
+    if label = "" then name else sprintf "%s %s" label name
+
+let private oneParamTrace (label: string) (toY: Complex -> float) (i: int) (j: int) (data: TouchstoneFile) =
+    let freqGHz, ys = paramSeries toY i j data
+    traceOfSeries label (paramTraceName label i j data) freqGHz ys
 
 /// Line traces for every Sij (or Yij/Zij/...) of one file.
 let private paramTraces (label: string) (toY: Complex -> float) (data: TouchstoneFile) =
@@ -316,16 +340,22 @@ let private quadMulti
         // title (only the last one wins), but each subplot keeps its own
         // axes — so the per-cell label goes on the Y axis instead.
         let subplot idx (i, j) =
-            let series =
+            // Extracted once per file and used for both the trace and the
+            // CSV/extrema series - see traceOfSeries.
+            let extracted =
                 files2p
                 |> List.map (fun (label, data) ->
-                    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-                    let ys = data.Matrices |> Array.map (fun m -> toY m.[i, j])
-                    (sprintf "%s S%d%d" label i j).Trim(), freqGHz, ys)
+                    let freqGHz, ys = paramSeries toY i j data
+                    label, data, freqGHz, ys)
+
+            let series =
+                extracted
+                |> List.map (fun (label, _, freqGHz, ys) -> (sprintf "%s S%d%d" label i j).Trim(), freqGHz, ys)
 
             let chart =
-                files2p
-                |> List.map (fun (label, data) -> oneParamTrace label toY i j data)
+                extracted
+                |> List.map (fun (label, data, freqGHz, ys) ->
+                    traceOfSeries label (paramTraceName label i j data) freqGHz ys)
                 |> Chart.combine
                 |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
@@ -482,17 +512,26 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
         if sFiles.IsEmpty then
             None
         else
-            let series =
+            // Γ extracted once per (file, parameter) and used for both the
+            // trace and the CSV series - see traceOfSeries. Built in the same
+            // order the per-file smithTraces calls produced, so trace and
+            // legend order are unchanged.
+            let extracted =
                 [ for (label, data) in sFiles do
                     for (i, j) in selected do
                         if i = j && i <= data.Ports then
                             let gammas = data.Matrices |> Array.map (fun m -> m.[i, i])
-                            let name = (sprintf "%s S%d%d" label i i).Trim()
-                            name, (gammas |> Array.map (fun g -> g.Real)), (gammas |> Array.map (fun g -> g.Imaginary)) ]
+
+                            label,
+                            (sprintf "%s S%d%d" label i i).Trim(),
+                            (gammas |> Array.map (fun g -> g.Real)),
+                            (gammas |> Array.map (fun g -> g.Imaginary)) ]
+
+            let series = extracted |> List.map (fun (_, name, re, im) -> name, re, im)
 
             let chart =
-                sFiles
-                |> List.collect (fun (label, data) -> smithTraces label selected data)
+                extracted
+                |> List.map (fun (label, name, re, im) -> traceOfSeries label name re im)
                 |> (@) (smithGrid ())
                 |> Chart.combine
                 |> smithLayout
@@ -506,13 +545,6 @@ let private vswrSeries (i: int) (data: TouchstoneFile) =
     |> Array.map (fun m ->
         let mag = m.[i, i].Magnitude
         (1.0 + mag) / (1.0 - mag))
-
-let private vswrTrace (label: string) (i: int) (data: TouchstoneFile) =
-    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-    let vswr = vswrSeries i data
-    let points = Array.zip freqGHz vswr |> lttb maxPointsPerTrace
-    let name = (sprintf "%s S%d%d" label i i).Trim()
-    styledLine label name (points |> Array.map fst) (points |> Array.map snd)
 
 /// VSWR vs frequency (GHz) of the selected reflection coefficients (e.g.
 /// `[ (1,1); (2,2) ]` for S11+S22) of several labeled S-parameter files —
@@ -532,20 +564,25 @@ let vswrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (str
         if sFiles.IsEmpty then
             None
         else
-            let series =
+            // One VSWR series per (file, parameter), used for both the trace
+            // and the CSV/extrema series - see traceOfSeries. Same order the
+            // two separate comprehensions produced before.
+            let extracted =
                 [ for (label, data) in sFiles do
                     for (i, j) in selected do
                         if i = j && i <= data.Ports then
-                            let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-                            (sprintf "%s S%d%d" label i i).Trim(), freqGHz, vswrSeries i data ]
+                            label,
+                            (sprintf "%s S%d%d" label i i).Trim(),
+                            (data.Frequencies |> Array.map (fun f -> f / 1e9)),
+                            vswrSeries i data ]
+
+            let series = extracted |> List.map (fun (_, name, xs, ys) -> name, xs, ys)
 
             let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "" series else [], []
 
             let chart =
-                sFiles
-                |> List.collect (fun (label, data) ->
-                    selected
-                    |> List.choose (fun (i, j) -> if i = j && i <= data.Ports then Some(vswrTrace label i data) else None))
+                extracted
+                |> List.map (fun (label, name, xs, ys) -> traceOfSeries label name xs ys)
                 |> Chart.combine
                 |> Chart.withTitle "VSWR"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
@@ -624,14 +661,6 @@ let private smoothed (ys: float[]) =
 let private groupDelaySeries (smooth: bool) (i: int) (j: int) (data: TouchstoneFile) =
     let raw = rawGroupDelay i j data
     if smooth then smoothed raw else raw
-
-let private groupDelayTrace (smooth: bool) (label: string) (i: int) (j: int) (data: TouchstoneFile) =
-    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-    let delayNs = groupDelaySeries smooth i j data
-    let points = Array.zip freqGHz delayNs |> lttb maxPointsPerTrace
-    let name = sprintf "%A%d%d" data.Option.Parameter i j
-    let name = if label = "" then name else sprintf "%s %s" label name
-    styledLine label name (points |> Array.map fst) (points |> Array.map snd)
 
 /// Linear interpolation of the series (xs, ys) at x; xs must be sorted
 /// ascending. Clamps to the nearest endpoint outside the series' range.
@@ -713,17 +742,35 @@ let groupDelayChartMulti
         if files2p.IsEmpty then
             None
         else
+            // Each (file, parameter) pair's series, computed once. The traces
+            // and the CSV/extrema series both need it, and a group-delay
+            // series is a whole unwrap + derivative (+ optional smoothing)
+            // pass - by far the most expensive thing this module used to
+            // compute twice. The two lists below keep their original, and
+            // deliberately different, orders: traces group by file, which is
+            // the legend order, while CSV columns group by parameter.
+            let extracted =
+                [ for (label, data) in files2p do
+                    for (i, j) in selected ->
+                        {| Label = label
+                           I = i
+                           J = j
+                           Name = (sprintf "%s S%d%d" label i j).Trim()
+                           TraceName = paramTraceName label i j data
+                           Xs = data.Frequencies |> Array.map (fun f -> f / 1e9)
+                           Ys = groupDelaySeries smooth i j data |} ]
+
             let series =
                 [ for (i, j) in selected do
-                    for (label, data) in files2p ->
-                        let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
-                        (sprintf "%s S%d%d" label i j).Trim(), freqGHz, groupDelaySeries smooth i j data ]
+                    for (label, _) in files2p ->
+                        let e = extracted |> List.find (fun e -> e.Label = label && e.I = i && e.J = j)
+                        e.Name, e.Xs, e.Ys ]
 
             let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []
 
             let chart =
-                files2p
-                |> List.collect (fun (label, data) -> selected |> List.map (fun (i, j) -> groupDelayTrace smooth label i j data))
+                extracted
+                |> List.map (fun e -> traceOfSeries e.Label e.TraceName e.Xs e.Ys)
                 |> Chart.combine
                 |> Chart.withTitle "Group Delay (ns)"
                 |> Chart.withXAxisStyle "Frequency (GHz)"
