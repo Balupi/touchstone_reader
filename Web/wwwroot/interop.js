@@ -404,10 +404,19 @@ window.touchstoneInterop = {
     // clears the emphasis when passed null. One Plotly.restyle per chart
     // with per-trace value arrays, not one call per trace the way
     // _setFileVisible does it: a legend hover touches every trace of every
-    // chart at once, and this runs during a pointer gesture. Baseline width
-    // and opacity are restored from _lastFigures — the figure as handed to
-    // Plotly.react, so its indices line up with el.data — rather than from
-    // a hardcoded default; `null` asks Plotly for its own default back.
+    // chart at once, and this runs during a pointer gesture.
+    //
+    // Everything not being emphasized is restyled to a literal default
+    // (opacity 1, and `null` for the width, which asks Plotly for its own
+    // default back) rather than to whatever _lastFigures holds for that
+    // trace. That looked like the more careful option and was in fact the
+    // bug that made the first version stick: Plotly.react keeps a reference
+    // to the very data objects stored there, so a restyle writes straight
+    // into what was meant to be the pristine copy. Reading a "baseline"
+    // back out of it after one highlight just returned the highlighted
+    // values, and clearing became a no-op. Only traces carrying a file
+    // label are touched, and those never arrive with a deliberate width or
+    // opacity of their own, so there is nothing to preserve.
     _setHighlight: function (fileName) {
         const self = window.touchstoneInterop;
 
@@ -424,25 +433,17 @@ window.touchstoneInterop = {
             const el = document.getElementById(divId);
             if (!el || !el.data) return;
 
-            const pristine = (self._lastFigures[divId] || {}).data || [];
             const indices = [];
             const opacity = [];
             const width = [];
-            const restore = (v) => (v === undefined ? null : v);
 
             el.data.forEach((trace, idx) => {
                 const label = self._fileLabelFor(trace.name);
                 if (!label) return;
 
-                const base = pristine[idx] || {};
                 indices.push(idx);
-                // Explicit 1 rather than null for the un-dimmed case: null
-                // asks Plotly to revert to the attribute default, which is
-                // fine in principle but leaves the reset depending on that
-                // path working for every attribute. Opacity is the visible
-                // half of the effect, so it gets an unambiguous value.
-                opacity.push(fileName && label !== fileName ? self._dimOpacity : (base.opacity === undefined ? 1 : base.opacity));
-                width.push(fileName && label === fileName ? self._highlightWidth : restore((base.line || {}).width));
+                opacity.push(fileName && label !== fileName ? self._dimOpacity : 1);
+                width.push(fileName && label === fileName ? self._highlightWidth : null);
             });
 
             if (indices.length) {
