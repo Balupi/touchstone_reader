@@ -436,7 +436,12 @@ window.touchstoneInterop = {
 
                 const base = pristine[idx] || {};
                 indices.push(idx);
-                opacity.push(fileName && label !== fileName ? self._dimOpacity : restore(base.opacity));
+                // Explicit 1 rather than null for the un-dimmed case: null
+                // asks Plotly to revert to the attribute default, which is
+                // fine in principle but leaves the reset depending on that
+                // path working for every attribute. Opacity is the visible
+                // half of the effect, so it gets an unambiguous value.
+                opacity.push(fileName && label !== fileName ? self._dimOpacity : (base.opacity === undefined ? 1 : base.opacity));
                 width.push(fileName && label === fileName ? self._highlightWidth : restore((base.line || {}).width));
             });
 
@@ -471,16 +476,26 @@ window.touchstoneInterop = {
             return text ? text.textContent.trim() : null;
         };
 
-        el.addEventListener('mouseover', function (e) {
-            const label = labelAt(e.target);
-            if (label) window.touchstoneInterop._setHighlight(label);
+        // mousemove, not mouseover/mouseout. The Plotly.restyle that
+        // _setHighlight issues redraws the legend, so the entry the pointer
+        // is resting on is detached from the document mid-hover. Its
+        // mouseout then fires on a node with no parent chain left, never
+        // reaches this listener, and the highlight stays stuck on — the
+        // first version of this did exactly that, working once and then
+        // never clearing. mousemove always arrives on a node that is
+        // currently under the pointer, so re-resolving the entry from
+        // scratch on every move cannot get out of step with the DOM.
+        // _setHighlight's own same-value guard keeps this down to one
+        // restyle per actual change, however often the event fires.
+        el.addEventListener('mousemove', function (e) {
+            window.touchstoneInterop._setHighlight(labelAt(e.target));
         });
 
-        el.addEventListener('mouseout', function (e) {
-            // Moving from one entry straight onto the next fires this before
-            // that entry's mouseover, so resolve where the pointer actually
-            // went: another entry means switch, anything else means clear.
-            window.touchstoneInterop._setHighlight(labelAt(e.relatedTarget));
+        // Leaving the chart entirely: mousemove stops arriving, so the
+        // clear has to happen here. Bound on the div itself rather than
+        // delegated, since mouseleave doesn't bubble.
+        el.addEventListener('mouseleave', function () {
+            window.touchstoneInterop._setHighlight(null);
         });
     },
 
