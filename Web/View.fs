@@ -775,13 +775,13 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                     }
                 }
 
-                let okCount = model.Files |> List.filter (fun f -> match f.Data with Ok _ -> true | Error _ -> false) |> List.length
+                let ok = okFiles model
+                let okCount = ok.Length
                 let unionRange = unionFreqRangeGHz model.Files
 
                 for f in model.Files do
                     fileTag dispatch okCount unionRange f
 
-                let ok = okFiles model
                 let has2Port = ok |> List.exists (fun (_, data) -> data.Ports = 2)
 
                 if not ok.IsEmpty then

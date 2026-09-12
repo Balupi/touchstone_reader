@@ -23,19 +23,60 @@ let private maxPointsPerTrace = 1500
 /// lines stay solid); the monochrome/print export additionally assigns each
 /// file its own dash pattern client-side (interop.js), since color alone
 /// can't survive being flattened to black there.
+///
+/// Colors are the DIN 47100 core-color code (wire colors 1-8, in order:
+/// White, Brown, Green, Yellow, Grey, Pink, Blue, Red - the standard
+/// sequence used for telecom/control-cable cores), doubled into a
+/// lighter "twin" tier (indices 8-15, same order) so up to 16 files stay
+/// distinguishable instead of repeating a color. "White" is rendered as a
+/// muted cream rather than true white/pale grey, which would be invisible
+/// against the chart background.
 let private filePalette =
-    [| "#3298dc"; "#f14668"; "#48c78e"; "#ffdd57"; "#485fc7"; "#00d1b2"; "#ff6b81"; "#9b59b6" |]
+    [| "#c9b37c"
+       "#8b5a2b"
+       "#3a9950"
+       "#e0b400"
+       "#8a8a8a"
+       "#e0729e"
+       "#3f7fd1"
+       "#d94141"
+       "#ded0a6"
+       "#c08a52"
+       "#7fcf8f"
+       "#f2d34d"
+       "#c4c4c4"
+       "#f0a8c4"
+       "#8fb8ea"
+       "#f08a8a" |]
 
-/// Deterministic index from a file's label, so its color stays the same
-/// across renders and doesn't shift when other files are added/removed —
-/// unlike an index into the current file list, which would.
-let private stableIndex (n: int) (label: string) =
-    let h = hash label
-    ((h % n) + n) % n
+/// Each currently-loaded file's position in the load order (files are kept
+/// sorted by natural filename order - see State.fs's naturalCompare), used
+/// to assign colors sequentially instead of by a hash of the filename: the
+/// alphanumerically-first file always gets the first palette color, the
+/// second file the second, and so on. Refreshed on every call to
+/// State.okFiles, which both the chart-building code and the web UI's
+/// file list read for their (respectively) trace and swatch colors - so
+/// both always agree on the current assignment. Colors are NOT stable per
+/// file identity under this scheme: removing an earlier file shifts every
+/// later file's color, which is the accepted trade-off for a
+/// load-order-based palette.
+let mutable private fileOrder: Map<string, int> = Map.empty
 
-/// Deterministic per-file color — same file, same color, in every chart it
-/// appears in. Also used by the web UI for each file's color swatch.
-let fileColor (label: string) = filePalette.[stableIndex filePalette.Length label]
+/// Records the current file load order so `fileColor` can look up each
+/// file's position in it. Called from State.okFiles.
+let setFileOrder (labels: string list) =
+    fileOrder <- labels |> List.mapi (fun i label -> label, i) |> Map.ofList
+
+/// Per-file color from its load-order position (see `setFileOrder`). Falls
+/// back to a hash of the name for a label not currently registered (e.g.
+/// called before any file has been loaded, or for a file no longer in the
+/// loaded set). Also used by the web UI for each file's color swatch.
+let fileColor (label: string) =
+    let n = filePalette.Length
+
+    match fileOrder.TryFind label with
+    | Some idx -> filePalette.[idx % n]
+    | None -> filePalette.[((hash label % n) + n) % n]
 
 /// A line trace, colored per-file when `label` is a real filename (multi-file
 /// web overlays); left to Plotly's own default per-trace-index coloring when

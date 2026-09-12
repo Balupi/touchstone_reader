@@ -106,6 +106,38 @@ type Message =
     | SetFreqRangeLinked of fileName: string * linked: bool
     | SetStatus of string option
 
+/// Compares two filenames "naturally": a run of digits compares by its
+/// numeric value rather than character-by-character, so e.g. "c2.s2p"
+/// sorts before "c10.s2p" (a plain ordinal compare would put "c10" first,
+/// since '1' < '2'). Non-digit runs still compare ordinally. Used to keep
+/// the loaded file list - and so every plot color derived from its order,
+/// see TouchstonePlot.setFileOrder - in a stable, human-expected order.
+let naturalCompare (a: string) (b: string) =
+    let chunks (s: string) =
+        System.Text.RegularExpressions.Regex.Matches(s, @"\d+|\D+")
+        |> Seq.cast<System.Text.RegularExpressions.Match>
+        |> Seq.map (fun m -> m.Value)
+        |> List.ofSeq
+
+    let rec compareChunks (xs: string list) (ys: string list) =
+        match xs, ys with
+        | [], [] -> 0
+        | [], _ -> -1
+        | _, [] -> 1
+        | x :: xs', y :: ys' ->
+            let bothDigits =
+                x.Length > 0 && y.Length > 0 && System.Char.IsDigit x.[0] && System.Char.IsDigit y.[0]
+
+            let c =
+                if bothDigits then
+                    compare (System.Numerics.BigInteger.Parse x) (System.Numerics.BigInteger.Parse y)
+                else
+                    System.String.CompareOrdinal(x, y)
+
+            if c <> 0 then c else compareChunks xs' ys'
+
+    compareChunks (chunks a) (chunks b)
+
 let update message model =
     match message with
     | FileDropped(fileName, content) ->
@@ -127,6 +159,11 @@ let update message model =
                 model.Files |> List.map (fun f -> if f.FileName = fileName then entry else f)
             else
                 model.Files @ [ entry ]
+            // Keeps the file list - and so every plot color derived from its
+            // order - in natural alphanumeric order regardless of the order
+            // files were dropped/selected in, and regardless of the order
+            // their (async) FileReader reads happen to complete in.
+            |> List.sortWith (fun a b -> naturalCompare a.FileName b.FileName)
 
         { model with Files = files }
     | RemoveFile fileName ->
@@ -205,14 +242,22 @@ let update message model =
 /// The Ok files, paired with their filename for use as an overlay chart
 /// label, windowed down to each file's selected frequency range (if any).
 let okFiles (model: Model) =
-    model.Files
-    |> List.choose (fun f ->
-        match f.Data with
-        | Ok data ->
-            let windowedData =
-                match f.FreqRangeGHz with
-                | Some(lo, hi) -> windowed (lo * 1e9) (hi * 1e9) data
-                | None -> data
+    let files =
+        model.Files
+        |> List.choose (fun f ->
+            match f.Data with
+            | Ok data ->
+                let windowedData =
+                    match f.FreqRangeGHz with
+                    | Some(lo, hi) -> windowed (lo * 1e9) (hi * 1e9) data
+                    | None -> data
 
-            Some(f.FileName, windowedData)
-        | Error _ -> None)
+                Some(f.FileName, windowedData)
+            | Error _ -> None)
+
+    // Fixes each file's plot color to its position in this list (see
+    // TouchstonePlot.setFileOrder) so the color used by any chart built
+    // from this result, and the color shown in the file-list swatch (also
+    // derived from this same function), always agree.
+    setFileOrder (files |> List.map fst)
+    files
