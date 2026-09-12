@@ -122,6 +122,27 @@ else entirely.
   it. Re-apply any such client-only state every time new figure JSON comes
   in, not just when the user makes the choice. See `_hiddenFiles` /
   `_applyHiddenFiles`, applied inside `renderChart` itself in `interop.js`.
+- **A redraw doesn't only drop client-side state — it also drops the DOM nodes your own events hang
+  off.** Legend hover (`_bindLegendHover`) has no Plotly event to ride on: there's
+  `plotly_legendclick`, but no `plotly_legendhover`, so it works on the legend's DOM directly. Every
+  draw rebuilds that DOM, *including the `Plotly.restyle` the hover handler itself issues* — the entry
+  under the pointer is detached mid-hover, and its later `mouseout` fires on a node with no parent
+  chain left, so a listener delegated from the chart div never sees it. Symptom: the highlight applied
+  on the first hover and then never cleared. Delegation fixes rebinding, not this. Resolving the target
+  on `mousemove` does, because a `mousemove` always arrives on a node that is currently in the
+  document — with a same-value guard so it still costs one restyle per actual change, plus a
+  `mouseleave` bound on the div itself for the pointer leaving the chart entirely, where no further
+  `mousemove` arrives. Reach for `mousemove` over `mouseover`/`mouseout` for anything hovering over
+  Plotly-owned DOM that the handler then restyles.
+- **`Plotly.react` keeps a reference to the trace objects handed to it, so a "kept copy" of the figure
+  is not a copy.** `_lastFigures` exists so a theme change can redraw without new data from .NET, and
+  reading a per-trace baseline (width, opacity) back out of it looks like the careful alternative to
+  hardcoding defaults. It is the opposite: `Plotly.restyle` writes into those very objects, so after
+  one highlight the stored figure already held the highlighted values — restoring "the baseline" then
+  restored the highlight, and the reset became a silent no-op that cost a second debugging round.
+  Restyle back to literal defaults instead (`opacity: 1`, `'line.width': null`, where null asks Plotly
+  for its own default) unless something genuinely needs preserving, and treat `_lastFigures` as live
+  state rather than a snapshot.
 - **`plotly_legendclick` is chart-local — it does not know about your other
   charts.** Plotly's own default legend-click behavior restyles only the one
   chart the clicked legend belongs to. If several separate `Plotly.react`-ed
@@ -266,6 +287,21 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
   `Object.keys(layout).filter(k => k.startsWith('xaxis') || k.startsWith('yaxis'))` mapped to their
   `.title` is a quick way to audit every axis on a chart at once, across every subplot Plotly.NET's
   `Chart.Grid` numbered.
+- **A stubbed Plotly only ever tests the assumptions you built into the stub.** The Node-level tests
+  for the legend-hover highlight passed through both of the Plotly bugs above, because the fake
+  `Plotly.restyle` didn't write back into `el.data` and `_lastFigures` held a genuine copy — exactly
+  the two assumptions the code was wrong about. They catch it now: the stub mutates the trace objects,
+  the stored figure shares them, and the assertions read values back off the traces instead of
+  comparing the restyle payload. When a stub stands in for a library, mirror the behavior being
+  depended on, not the behavior being expected.
+- **For Plotly interaction bugs, get to a real browser before reasoning a third time.** Two rounds of
+  careful reasoning produced two wrong diagnoses of the stuck highlight; a throwaway harness — real
+  `plotly.js` from npm, a page mimicking what F# hands `renderChart`, Playwright driving
+  `page.mouse.move` across a legend entry and away, and reading `el._fullData[...].opacity` back —
+  showed the actual cause on the first run. Cheap to build, and it exercises the real legend DOM and
+  the real restyle semantics that no stub reproduces. (Only in a sandbox with a Node toolchain, which
+  this project deliberately doesn't have — see "Why Bolero, not Fable" — and an alternative to the
+  Preview MCP route above, not a replacement for it.)
 - If this or a follow-up project adds Expecto: `dotnet run`, not `dotnet test`, is the right way to
   invoke it — but that's not set up anywhere in this repo yet.
 
