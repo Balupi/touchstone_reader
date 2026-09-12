@@ -355,6 +355,127 @@ window.touchstoneInterop = {
         });
     },
 
+    // The file whose curves are currently emphasized, or null. Set by
+    // hovering that file's legend entry (see _bindLegendHover) — purely
+    // presentational and transient, unlike _hiddenFiles, but re-applied on
+    // every renderChart for the same reason: Plotly.react rebuilds the
+    // figure from the JSON F# just produced, which knows nothing about it.
+    _highlightedFile: null,
+
+    // What "highlighted" looks like: the other files drop to _dimOpacity,
+    // the highlighted one grows to _highlightWidth. Dimming rather than
+    // recoloring keeps each file's own palette color — and with it the
+    // match to its file-list swatch — readable while it sits in the
+    // background.
+    _dimOpacity: 0.18,
+    _highlightWidth: 3,
+
+    _applyHighlight: function (data) {
+        const self = window.touchstoneInterop;
+        const target = self._highlightedFile;
+        if (!target) return data;
+
+        // A highlight naming a file this chart doesn't have would dim every
+        // trace and emphasize nothing — reachable if the file went away
+        // while its legend entry was hovered. Leave the figure alone.
+        if (!data.some((trace) => self._fileLabelFor(trace.name) === target)) return data;
+
+        return data.map((trace) => {
+            const label = self._fileLabelFor(trace.name);
+            if (!label) return trace; // Smith grid lines — same test _printData uses
+            if (label === target) {
+                return Object.assign({}, trace, {
+                    line: Object.assign({}, trace.line, { width: self._highlightWidth }),
+                });
+            }
+            return Object.assign({}, trace, { opacity: self._dimOpacity });
+        });
+    },
+
+    // Emphasizes `fileName`'s curves in every currently-rendered chart, or
+    // clears the emphasis when passed null. One Plotly.restyle per chart
+    // with per-trace value arrays, not one call per trace the way
+    // _setFileVisible does it: a legend hover touches every trace of every
+    // chart at once, and this runs during a pointer gesture. Baseline width
+    // and opacity are restored from _lastFigures — the figure as handed to
+    // Plotly.react, so its indices line up with el.data — rather than from
+    // a hardcoded default; `null` asks Plotly for its own default back.
+    _setHighlight: function (fileName) {
+        const self = window.touchstoneInterop;
+
+        // Hovering a hidden file's legend entry would dim every other file
+        // while emphasizing nothing that's actually on screen — so treat it
+        // as no highlight at all. Only the global _hiddenFiles counts here;
+        // a file hidden on just the TDR pair is still visible elsewhere.
+        if (fileName && self._hiddenFiles.has(fileName)) fileName = null;
+
+        if (self._highlightedFile === fileName) return;
+        self._highlightedFile = fileName;
+
+        Object.keys(self._lastFigures).forEach((divId) => {
+            const el = document.getElementById(divId);
+            if (!el || !el.data) return;
+
+            const pristine = (self._lastFigures[divId] || {}).data || [];
+            const indices = [];
+            const opacity = [];
+            const width = [];
+            const restore = (v) => (v === undefined ? null : v);
+
+            el.data.forEach((trace, idx) => {
+                const label = self._fileLabelFor(trace.name);
+                if (!label) return;
+
+                const base = pristine[idx] || {};
+                indices.push(idx);
+                opacity.push(fileName && label !== fileName ? self._dimOpacity : restore(base.opacity));
+                width.push(fileName && label === fileName ? self._highlightWidth : restore((base.line || {}).width));
+            });
+
+            if (indices.length) {
+                Plotly.restyle(el, { opacity: opacity, 'line.width': width }, indices);
+            }
+        });
+    },
+
+    // Plotly has no legend-hover event (only plotly_legendclick), so this
+    // rides on the legend's DOM instead. Two things shape how: the legend is
+    // redrawn from scratch on every draw — including the Plotly.restyle that
+    // _setHighlight itself issues — so per-entry listeners would need
+    // constant rebinding and, worse, the entry under the cursor gets
+    // replaced mid-hover, so its own mouseleave never arrives and the
+    // highlight sticks on. Delegating from the chart div, which Plotly never
+    // replaces, using mouseover/mouseout (those bubble; mouseenter and
+    // mouseleave don't) avoids both: bound once per div, and the pointer's
+    // position is re-resolved from scratch on every move. An entry's text is
+    // the filename itself, since _dedupeLegendByFile renames each file's
+    // representative trace to the bare filename — no need to read Plotly's
+    // internal per-node data.
+    _bindLegendHover: function (divId) {
+        const el = document.getElementById(divId);
+        if (!el || el.dataset.legendHoverBound) return;
+        el.dataset.legendHoverBound = 'true';
+
+        const labelAt = function (node) {
+            const entry = node && node.closest ? node.closest('g.traces') : null;
+            if (!entry) return null;
+            const text = entry.querySelector('.legendtext');
+            return text ? text.textContent.trim() : null;
+        };
+
+        el.addEventListener('mouseover', function (e) {
+            const label = labelAt(e.target);
+            if (label) window.touchstoneInterop._setHighlight(label);
+        });
+
+        el.addEventListener('mouseout', function (e) {
+            // Moving from one entry straight onto the next fires this before
+            // that entry's mouseover, so resolve where the pointer actually
+            // went: another entry means switch, anything else means clear.
+            window.touchstoneInterop._setHighlight(labelAt(e.relatedTarget));
+        });
+    },
+
     // Widens each trace for legibility once printed/exported (thin on-screen
     // lines can look faint on paper); color is left untouched, unlike the
     // black-flattened export this replaced. Grid lines (the Smith chart's
@@ -455,6 +576,7 @@ window.touchstoneInterop = {
         const fig = JSON.parse(figureJson);
         fig.data = window.touchstoneInterop._dedupeLegendByFile(fig.data);
         fig.data = window.touchstoneInterop._applyHiddenFiles(fig.data);
+        fig.data = window.touchstoneInterop._applyHighlight(fig.data);
         if (divId === 'chart-tdr' || divId === 'chart-tdr-gated') {
             fig.data = window.touchstoneInterop._applyTdrHiddenFiles(fig.data);
         }
@@ -497,6 +619,7 @@ window.touchstoneInterop = {
         Plotly.react(divId, fig.data, window.touchstoneInterop._themeLayout(fig.layout), window.touchstoneInterop._config(divId)).then(() => {
             window.touchstoneInterop._bindTdrGateDrag(divId);
             window.touchstoneInterop._bindLegendClick(divId);
+            window.touchstoneInterop._bindLegendHover(divId);
         });
     },
 
@@ -606,6 +729,7 @@ window.touchstoneInterop = {
                     Plotly.Plots.resize(el);
                     window.touchstoneInterop._bindTdrGateDrag(el.id);
                     window.touchstoneInterop._bindLegendClick(el.id);
+                    window.touchstoneInterop._bindLegendHover(el.id);
                 });
             });
         });
