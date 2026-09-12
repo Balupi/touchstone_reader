@@ -3,3 +3,6 @@ obj/
 .claude/settings.local.json
 
 .fake
+
+# Synthetic .s2p test data, generated on demand rather than versioned
+sample-data/

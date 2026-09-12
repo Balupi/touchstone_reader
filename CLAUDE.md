@@ -192,6 +192,20 @@ else entirely.
   data point) on every render — even though the download button is clicked rarely — was measurably
   wasted work. Look for the same shape before assuming "just compute it upfront" is fine in a WASM
   context.
+- **A comparator's cost is multiplied by however many times the sort runs — and here the sort runs
+  once per message, not once per batch.** `FileDropped` re-sorts all of `model.Files` on every
+  individual file: files arrive one message at a time and their async `FileReader` reads can complete
+  out of order, so sorting on arrival is the only way to get an order that doesn't depend on read
+  timing. That makes a batch drop O(n² log n) comparisons, not O(n log n). The first `naturalCompare`
+  looked entirely reasonable in isolation — two `Regex.Matches` calls, two intermediate lists,
+  `BigInteger.Parse` per digit run — and still measured (native, `dotnet fsi`, best of three) 107 ms
+  of *name comparing* for a 50-file drop and 2.2 s for 500 files, against roughly 2 s to actually
+  parse those same 500 files: sorting had become as expensive as the work it was ordering, which
+  matters now that a dropped folder is walked recursively. Rewritten as a single in-place pass over
+  both strings (no regex, no intermediate lists, no `BigInteger`), the same 500-file drop spends
+  23 ms — ~100x less per comparison. Under the WASM interpreter both sides scale up, so the ratio is
+  what carries over. Before optimizing the obviously heavy work (parsing, downsampling), check what
+  the *cheap-looking* helper is being called n² times.
 
 ## F# style
 
@@ -356,6 +370,24 @@ A few concepts that came up and are worth being comfortable with, not just patte
   by any input edit (`FdmState` in `StriplineCalc/State.fs`) — recomputing it on every keystroke like
   the cheap closed-form result would freeze the UI. Same underlying reality as the Performance section
   above; this is the interaction-design consequence.
+- **Load-order colors and stable-per-file colors are mutually exclusive — pick one deliberately.**
+  Each file's trace color was originally `filePalette.[hash filename % 8]`: the same file kept the
+  same color forever, but the assignment was arbitrary, and the file list's order said nothing about
+  which color a file would get. It is now the file's *position* in the (naturally sorted) load order,
+  via `TouchstonePlot.setFileOrder` / `fileColor`, over a 16-entry palette — the DIN 47100 core-color
+  sequence (Weiß, Braun, Grün, Gelb, Grau, Rosa, Blau, Rot), doubled into a lighter twin tier so 16
+  overlaid files stay distinguishable. The cost was accepted knowingly: removing an earlier file now
+  shifts every later file's color. Don't "fix" that symptom by reintroducing a hash — the two
+  properties can't both hold, so it's a product decision, not a bug.
+- **One function should own any derived presentation state that two views have to agree on.** The
+  chart traces (built in `Main.fs`) and the file-list swatches (`View.fs`) both need the same
+  file→color mapping, and they're computed at different points in the render cycle — independently
+  derived, they would drift apart for a frame or worse. So `okFiles` in `State.fs`, the single
+  list-of-plottable-files function both already call, refreshes the order registry as a side effect;
+  any consumer that goes through it inherits the same mapping for free. The flip side is an ordering
+  constraint that isn't visible from the type signature: `View.fs` computes `okFiles model` *before*
+  rendering the swatches for exactly this reason. If that side effect ever moves, both call sites
+  need re-checking together.
 
 ---
 
