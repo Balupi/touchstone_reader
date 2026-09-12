@@ -173,10 +173,16 @@ let private toCsv (xLabel: string) (yLabel: string) (series: (string * float[] *
     header + "\n" + ([ for r in 0 .. maxLen - 1 -> row r ] |> String.concat "\n")
 
 /// Fixed colors for the global min/max reference lines — deliberately
-/// outside `_colorway` (interop.js) so they never coincide with a data
-/// trace's own color and always read as reference lines, not data.
-let private minColor = "#e0a12e"
-let private maxColor = "#e63946"
+/// outside `filePalette` so they never coincide with a data trace's own
+/// color and always read as reference lines, not data. Violet is the one
+/// hue region the DIN 47100 palette doesn't touch, which buys a lot of
+/// room: both sit at least ΔE 42 (CIE76) from every file color and from
+/// the TDR gate lines below, and ΔE 34 from each other. The amber/red pair
+/// they replace was picked against the old 8-color palette and had since
+/// drifted to ΔE 7 from its "Rot" entry — close enough on screen to read
+/// as just another file's curve rather than a reference line.
+let private minColor = "#6f42c1"
+let private maxColor = "#b5179e"
 
 /// The global minimum and maximum across several (xs, ys) series in one
 /// subplot/chart, as a horizontal dashed line spanning the data's x-range
@@ -441,12 +447,24 @@ let private reactanceArc (x: float) = clipToUnitDisk (circlePoints 1.0 (1.0 / x)
 
 let private smithGridColor = Color.fromString "#999999"
 
+/// The Smith chart's grid, drawn as ordinary traces because a Smith chart
+/// has no rectangular axes to hang real gridlines off. Dotted rather than
+/// solid, and that's deliberate: color alone can't separate it from
+/// filePalette's own two grey entries. Anything light and neutral enough to
+/// recede into the background lands within ΔE 16 of "Grau hell", and going
+/// darker instead breaks the dark theme, where these traces keep whatever
+/// color they're given here (unlike the axis gridlines, which interop.js
+/// re-themes per scheme). Line style is the channel that settles it: every
+/// data curve is solid, so a dotted line reads as chrome whatever its hue —
+/// the same convention the min/max (dashed) and TDR gate (dotted) reference
+/// lines already use.
 let private smithGridLine (pts: (float * float)[]) =
     Chart.Line(
         x = (pts |> Array.map fst),
         y = (pts |> Array.map snd),
         LineColor = smithGridColor,
         LineWidth = 1.0,
+        LineDash = StyleParam.DrawingStyle.Dot,
         ShowLegend = false
     )
 

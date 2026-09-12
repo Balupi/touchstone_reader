@@ -89,9 +89,17 @@ window.touchstoneInterop = {
         }
     },
 
-    // A Bulma-flavored qualitative palette so trace colors feel like part of
-    // the same UI instead of Plotly's unrelated default set.
-    _colorway: ['#3298dc', '#f14668', '#48c78e', '#ffdd57', '#485fc7', '#00d1b2', '#ff6b81', '#9b59b6'],
+    // Mirrors filePalette in TouchstonePlot.fs (the DIN 47100 core colors,
+    // doubled into a lighter tier), so a trace that ever arrives without an
+    // explicit color still lands inside the same set the file list's
+    // swatches draw from. Every multi-file trace carries its own color
+    // today, so this is only a fallback — but a stale one quietly puts back
+    // colors the reference lines were never checked against, which is how
+    // it drifted the first time.
+    _colorway: [
+        '#c9b37c', '#8b5a2b', '#3a9950', '#e0b400', '#8a8a8a', '#e0729e', '#3f7fd1', '#d94141',
+        '#ded0a6', '#c08a52', '#7fcf8f', '#f2d34d', '#c4c4c4', '#f0a8c4', '#8fb8ea', '#f08a8a',
+    ],
 
     // Plotly.NET always bakes in an explicit layout.width, which pins the
     // chart to that pixel size regardless of the `responsive: true` config —
