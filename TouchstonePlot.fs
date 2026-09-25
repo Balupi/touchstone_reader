@@ -248,7 +248,7 @@ let private traceOfSeries (label: string) (name: string) (xs: float[]) (ys: floa
 /// Frequency (GHz) and the scalar `toY` picks out, for one Sij of one file,
 /// at full resolution.
 let private paramSeries (toY: Complex -> float) (i: int) (j: int) (data: TouchstoneFile) =
-    data.Frequencies |> Array.map (fun f -> f / 1e9), data.Matrices |> Array.map (fun m -> toY m.[i, j])
+    data.Frequencies |> Array.map (fun f -> f / 1e9), entry data i j |> Array.map toY
 
 /// Trace name for one Sij (or Yij/Zij/...): the file's own parameter letter,
 /// prefixed with the file label when several files are overlaid. Note this
@@ -310,7 +310,7 @@ let magnitudeGrid (data: TouchstoneFile) =
     let n = data.Ports
     [ for i in 1 .. n do
         for j in 1 .. n ->
-            let ys = data.Matrices |> Array.map (fun m -> toDb m.[i, j])
+            let ys = entry data i j |> Array.map toDb
             Chart.Line(x = freqGHz, y = ys, Name = sprintf "%A%d%d" data.Option.Parameter i j)
             |> Chart.withTitle (sprintf "%A%d%d" data.Option.Parameter i j)
             |> Chart.withXAxisStyle "Frequency (GHz)"
@@ -482,8 +482,8 @@ let private smithTraces (label: string) (selected: (int * int) list) (data: Touc
     |> List.filter (fun (i, j) -> i = j && i <= data.Ports)
     |> List.map (fun (i, _) ->
         let points =
-            data.Matrices
-            |> Array.map (fun m -> let g = m.[i, i] in (g.Real, g.Imaginary))
+            entry data i i
+            |> Array.map (fun g -> g.Real, g.Imaginary)
             |> lttb maxPointsPerTrace
 
         let name = sprintf "S%d%d" i i
@@ -538,7 +538,7 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
                 [ for (label, data) in sFiles do
                     for (i, j) in selected do
                         if i = j && i <= data.Ports then
-                            let gammas = data.Matrices |> Array.map (fun m -> m.[i, i])
+                            let gammas = entry data i i
 
                             label,
                             (sprintf "%s S%d%d" label i i).Trim(),
@@ -559,9 +559,9 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
 /// VSWR (dimensionless, >= 1) from a reflection coefficient's magnitude:
 /// (1+|Γ|)/(1-|Γ|). 1.0 is a perfect match; higher is worse.
 let private vswrSeries (i: int) (data: TouchstoneFile) =
-    data.Matrices
-    |> Array.map (fun m ->
-        let mag = m.[i, i].Magnitude
+    entry data i i
+    |> Array.map (fun gamma ->
+        let mag = gamma.Magnitude
         (1.0 + mag) / (1.0 - mag))
 
 /// VSWR vs frequency (GHz) of the selected reflection coefficients (e.g.
@@ -634,7 +634,7 @@ let private unwrap (radians: float[]) =
 /// unwrapped (radians). Central difference in the interior, one-sided at
 /// the endpoints. Not downsampled — callers combine/derive from this first.
 let private rawGroupDelay (i: int) (j: int) (data: TouchstoneFile) =
-    let phases = data.Matrices |> Array.map (fun m -> m.[i, j].Phase) |> unwrap
+    let phases = entry data i j |> Array.map (fun c -> c.Phase) |> unwrap
     let n = phases.Length
 
     let delayNs =
@@ -1120,7 +1120,7 @@ let private gateBoundaryShapes (gateNs: (float * float) option) =
 /// once zoomed into a region it didn't optimize for — this chart is exactly
 /// the one people zoom into.
 let private tdrSeriesAndTrace (label: string) (i: int) (data: TouchstoneFile) =
-    let gamma = data.Matrices |> Array.map (fun m -> m.[i, i])
+    let gamma = entry data i i
     let timeNs, impedance = tdrImpedance data.Option.R data.Frequencies gamma
     let name = (sprintf "%s S%d%d" label i i).Trim()
     let trace = styledLine label name timeNs impedance
@@ -1172,7 +1172,7 @@ let tdrChartMulti
             Some { Chart = chart; Csv = fun () -> toCsv "Time (ns)" "Impedance (Ω)" series }
 
 let private tdrGatedTrace (label: string) (gateNs: (float * float) option) (i: int) (data: TouchstoneFile) =
-    let gamma = data.Matrices |> Array.map (fun m -> m.[i, i])
+    let gamma = entry data i i
     let freqsOutHz, gammaOut = tdrGatedResponse gateNs data.Frequencies gamma
     let freqGHz = freqsOutHz |> Array.map (fun f -> f / 1e9)
     let db = gammaOut |> Array.map toDb

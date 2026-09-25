@@ -3,6 +3,7 @@
 module TouchstoneReader.Touchstone
 
 open System
+open System.Globalization
 open System.IO
 open System.Numerics
 
@@ -25,8 +26,21 @@ type TouchstoneFile =
       Option: OptionLine
       References: float list
       Frequencies: float[]      // Hz
-      Matrices: Complex[,][]    // one (ports+1)x(ports+1) matrix per frequency, 1-indexed
+      /// One array per network parameter, each holding that parameter's value
+      /// at every frequency: Sij lives in `Entries.[(i-1) * Ports + (j-1)]`,
+      /// or just `entry data i j`. Stored this way rather than as one matrix
+      /// per frequency because every consumer here reads a single parameter
+      /// across the whole sweep — a trace, a CSV series, an FFT input — and
+      /// none needs a whole matrix at one frequency. Each read is then one
+      /// contiguous array instead of a walk across thousands of tiny 2D
+      /// arrays, and the parser stops allocating one of those per point.
+      Entries: Complex[][]
       Comments: string list }   // '!' lines before the first non-comment line, e.g. instrument/date info
+
+/// One parameter across the whole sweep: Sij (or Yij/Zij/...) at every
+/// frequency. 1-indexed, like the file format itself.
+let entry (data: TouchstoneFile) (i: int) (j: int) =
+    data.Entries.[(i - 1) * data.Ports + (j - 1)]
 
 let private freqMultiplier = function
     | Hz -> 1.0 | KHz -> 1e3 | MHz -> 1e6 | GHz -> 1e9
@@ -99,11 +113,15 @@ let parse (fileName: string) (content: string) : TouchstoneFile =
         |> Array.map (fun l -> l.TrimStart('!').Trim())
         |> Array.toList
 
+    // One pass rather than three: on an 11,000-point sweep each extra pass is
+    // another 11,000-element array built only to be thrown away. stripComment
+    // and Trim both hand back the original instance when there's nothing to
+    // cut, so a well-formed data line still isn't copied here.
     let lines =
         rawLines
-        |> Array.map stripComment
-        |> Array.map (fun l -> l.Trim())
-        |> Array.filter (fun l -> l.Length > 0)
+        |> Array.choose (fun raw ->
+            let line = (stripComment raw).Trim()
+            if line.Length = 0 then None else Some line)
 
     let isV2 =
         lines |> Array.exists (fun l -> l.StartsWith("[Version]", StringComparison.OrdinalIgnoreCase))
@@ -115,7 +133,30 @@ let parse (fileName: string) (content: string) : TouchstoneFile =
     let mutable twoPortOrder = Order21_12
     let mutable inNetworkData = not isV2   // legacy files: everything non-# is data
     let mutable inNoiseData = false
-    let networkTokens = ResizeArray<string>()
+
+    /// Every number in the network-data rows, in file order. Parsed straight
+    /// out of the line instead of being collected as strings first: an
+    /// 11,000-point 2-port sweep is 99,000 tokens, and turning each into its
+    /// own string — then walking them all again through a Seq — cost more
+    /// than the rest of this function put together.
+    let networkValues = ResizeArray<float>(8192)
+
+    let addNumbers (line: string) =
+        let mutable pos = 0
+
+        while pos < line.Length do
+            while pos < line.Length && (line.[pos] = ' ' || line.[pos] = '\t') do
+                pos <- pos + 1
+
+            let start = pos
+
+            while pos < line.Length && line.[pos] <> ' ' && line.[pos] <> '\t' do
+                pos <- pos + 1
+
+            if pos > start then
+                networkValues.Add(
+                    Double.Parse(line.AsSpan(start, pos - start), NumberStyles.Float, CultureInfo.InvariantCulture)
+                )
 
     for line in lines do
         if line.StartsWith("#") then
@@ -156,39 +197,41 @@ let parse (fileName: string) (content: string) : TouchstoneFile =
             | "end" -> inNetworkData <- false; inNoiseData <- false
             | _ -> () // Number of Frequencies, Number of Noise Frequencies, etc. -> ignored
         else
-            if inNetworkData then
-                networkTokens.AddRange(line.Split([| ' '; '\t' |], StringSplitOptions.RemoveEmptyEntries))
+            if inNetworkData then addNumbers line
             // noise-data rows are intentionally skipped
 
     if ports <= 0 then failwith "Could not determine number of ports (missing [Number of Ports] or bad filename)."
 
-    let order = entryOrder ports matrixFmt twoPortOrder
+    let order = entryOrder ports matrixFmt twoPortOrder |> List.toArray
     let valuesPerFreq = 1 + order.Length * 2
-    let allValues = networkTokens |> Seq.map float |> Seq.toArray
 
-    if allValues.Length % valuesPerFreq <> 0 then
+    if networkValues.Count % valuesPerFreq <> 0 then
         eprintfn "Warning: token count (%d) isn't a multiple of expected row size (%d); trailing data may be dropped."
-            allValues.Length valuesPerFreq
+            networkValues.Count valuesPerFreq
 
-    let numFreqs = allValues.Length / valuesPerFreq
+    let numFreqs = networkValues.Count / valuesPerFreq
     let freqs = Array.zeroCreate<float> numFreqs
-    let matrices = Array.zeroCreate<Complex[,]> numFreqs
+    // Entries a file doesn't carry — a Lower/Upper matrix format leaves half
+    // of them out — stay Complex.Zero, exactly as the per-frequency matrices
+    // did, since those were created filled.
+    let entries = Array.init (ports * ports) (fun _ -> Array.zeroCreate<Complex> numFreqs)
+    let multiplier = freqMultiplier opt.FreqUnit
 
     for f in 0 .. numFreqs - 1 do
         let baseIdx = f * valuesPerFreq
-        freqs.[f] <- allValues.[baseIdx] * freqMultiplier opt.FreqUnit
-        let m = Array2D.create (ports + 1) (ports + 1) Complex.Zero // 1-indexed
-        order |> List.iteri (fun k (r, c) ->
-            let a = allValues.[baseIdx + 1 + 2 * k]
-            let b = allValues.[baseIdx + 1 + 2 * k + 1]
-            m.[r, c] <- toComplex opt.Format a b)
-        matrices.[f] <- m
+        freqs.[f] <- networkValues.[baseIdx] * multiplier
+
+        for k in 0 .. order.Length - 1 do
+            let r, c = order.[k]
+            let a = networkValues.[baseIdx + 1 + 2 * k]
+            let b = networkValues.[baseIdx + 2 + 2 * k]
+            entries.[(r - 1) * ports + (c - 1)].[f] <- toComplex opt.Format a b
 
     { Ports = ports
       Option = opt
       References = references
       Frequencies = freqs
-      Matrices = matrices
+      Entries = entries
       Comments = comments }
 
 /// Reads and parses a Touchstone file from disk.
@@ -225,6 +268,15 @@ let windowed (loHz: float) (hiHz: float) (data: TouchstoneFile) =
     // worst, so the length stays non-negative without a clamp.
     let len = hi - lo + 1
 
-    { data with
-        Frequencies = Array.sub freqs lo len
-        Matrices = Array.sub data.Matrices lo len }
+    if len = freqs.Length then
+        // The range covers the whole sweep, which is what a slider dragged
+        // back to its ends looks like. Copying every parameter array to say
+        // "all of it" is the one case where this function can be free, and
+        // since the per-parameter arrays hold values rather than references
+        // now, that copy is real work: four arrays of Complex instead of one
+        // of pointers.
+        data
+    else
+        { data with
+            Frequencies = Array.sub freqs lo len
+            Entries = data.Entries |> Array.map (fun series -> Array.sub series lo len) }
