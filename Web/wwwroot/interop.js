@@ -385,6 +385,66 @@ window.touchstoneInterop = {
             if (fileName) window.touchstoneInterop._toggleTdrPairFileHidden(fileName);
             return false;
         });
+
+        // Double-click isolates one file, which is Plotly's own default
+        // (legend.itemdoubleclick: 'toggleothers') and works untouched on
+        // every other chart. Not here though: the single-click override above
+        // returns false to suppress Plotly's built-in handling, and that takes
+        // the double-click behavior with it — verified in a browser, where a
+        // double-click on these two charts did nothing at all. So it's
+        // reimplemented on the pair's own hidden set, which has the side
+        // benefit of surviving a re-render (see _applyTdrHiddenFiles), unlike
+        // Plotly's version elsewhere.
+        el.removeAllListeners('plotly_legenddoubleclick');
+        el.on('plotly_legenddoubleclick', function (eventData) {
+            const trace = eventData.data[eventData.curveNumber];
+            const fileName = window.touchstoneInterop._fileLabelFor(trace.name);
+            if (fileName) window.touchstoneInterop._isolateTdrPairFile(fileName, eventData.data);
+            return false;
+        });
+    },
+
+    // Shows only `fileName` on the TDR pair and hides every other file, or
+    // restores all of them when that file is already the only one showing —
+    // the same second-double-click-undoes-it behavior Plotly gives the other
+    // charts. The two single clicks that precede a double click have already
+    // toggled this file twice by the time this runs, which nets out, so the
+    // set is rebuilt from scratch here rather than adjusted.
+    _isolateTdrPairFile: function (fileName, data) {
+        const self = window.touchstoneInterop;
+
+        const others = new Set();
+        data.forEach((trace) => {
+            const label = self._fileLabelFor(trace.name);
+            if (label && label !== fileName) others.add(label);
+        });
+
+        const alreadyIsolated =
+            others.size > 0 &&
+            self._tdrHiddenFiles.size === others.size &&
+            [...others].every((label) => self._tdrHiddenFiles.has(label));
+
+        self._tdrHiddenFiles = alreadyIsolated ? new Set() : others;
+
+        ['chart-tdr', 'chart-tdr-gated'].forEach((divId) => {
+            const el = document.getElementById(divId);
+            if (!el || !el.data) return;
+
+            const indices = [];
+            const visible = [];
+
+            el.data.forEach((trace, idx) => {
+                const label = self._fileLabelFor(trace.name);
+                if (!label) return; // gate lines and other chrome stay put
+
+                indices.push(idx);
+                // A file hidden globally via its file-list swatch stays hidden
+                // either way; this layer only ever adds to that.
+                visible.push(self._tdrHiddenFiles.has(label) || self._hiddenFiles.has(label) ? 'legendonly' : true);
+            });
+
+            if (indices.length) Plotly.restyle(el, { visible: visible }, indices);
+        });
     },
 
     // The file whose curves are currently emphasized, or null. Set by
