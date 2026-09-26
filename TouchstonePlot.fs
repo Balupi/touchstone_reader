@@ -6,6 +6,7 @@ open System.Numerics
 open Plotly.NET
 open Plotly.NET.LayoutObjects
 open TouchstoneReader.Touchstone
+open TouchstoneReader.LimitTest
 
 let private toDb (c: Complex) = 20.0 * log10 c.Magnitude
 let private toDeg (c: Complex) = c.Phase * 180.0 / Math.PI
@@ -322,6 +323,86 @@ let magnitudeGrid (data: TouchstoneFile) =
 /// bottom-left, S22 bottom-right.
 let magnitudeQuadOrder = [ (1, 1); (2, 1); (1, 2); (2, 2) ]
 
+/// The limit mask and its violations. The mask has to stay legible on both
+/// themes, and these charts keep whatever color they're given here — only
+/// the axis gridlines get re-themed in interop.js. That's a narrow window:
+/// contrast against white caps how light it can be, contrast against the
+/// dark page floors how dark, and the first try (a dark teal, #1a535c) sat
+/// at 1.8:1 on the dark page and was invisible there. This cyan clears 3:1
+/// on both, and it's deliberately the same cyan as the TDR gate lines — a
+/// consistent "a reference line you entered" color, and the two never share
+/// a chart. The failure red stays outside filePalette (ΔE 21 to its nearest
+/// file color) and is drawn as X markers, so shape carries it too.
+let private limitLineColor = "#17a2b8"
+let private limitFailColor = "#ff1744"
+
+/// Cap on failure markers drawn per file and parameter. A violation across a
+/// wide band easily covers thousands of points, and a few hundred markers
+/// already say "this whole stretch is out". The verdict never depends on
+/// this — only how many markers get drawn for it.
+let private maxFailMarkers = 300
+
+let private thinned (cap: int) (indices: int[]) =
+    if indices.Length <= cap then
+        indices
+    else
+        let step = float indices.Length / float cap
+        Array.init cap (fun k -> indices.[int (float k * step)])
+
+/// The mask: one dashed line per active row of the table. Named "" on
+/// purpose, exactly like the Smith chart's grid lines — interop.js tells
+/// *data* traces apart by their having a file label, so anything without one
+/// is skipped by the legend dedupe, the hide and highlight layers and the
+/// print restyle. A mask showing up in the file list as a pretend file would
+/// be worse than one without a hover label.
+let private limitTraces (segments: LimitSegment list) =
+    polylines segments
+    |> List.map (fun (_, xs, ys) ->
+        Chart.Line(
+            x = xs,
+            y = ys,
+            Name = "",
+            LineColor = Color.fromString limitLineColor,
+            // Thicker than a data curve (Plotly's default 2) on purpose, so
+            // the mask reads as the boundary the curves are judged against
+            // rather than as one more trace among them. Still under the 3 a
+            // legend-hovered file gets, so highlighting stays the strongest
+            // thing on the chart.
+            LineWidth = 2.5,
+            LineDash = StyleParam.DrawingStyle.Dash,
+            ShowLegend = false
+        ))
+
+/// The points of one file's series that fall outside the mask, marked on top
+/// of it. Taken from the full-resolution evaluation, not from the lttb-reduced
+/// curve: a narrow violation is precisely the kind of feature downsampling
+/// drops, and a failure vanishing because the plot was thinned would be the
+/// worst failure mode this feature could have.
+///
+/// Named exactly like the curve it belongs to, and kept out of the legend.
+/// The name is what ties it to its file for every client-side layer in
+/// interop.js — hiding a file takes its failure markers with it, and so does
+/// dimming it on legend hover. The mask itself is the opposite case: it
+/// belongs to no file, so it stays nameless like the Smith grid lines.
+let private limitFailTrace (segments: LimitSegment list) (name: string) (xs: float[]) (ys: float[]) =
+    let outcome = evaluate segments xs ys
+
+    if Array.isEmpty outcome.FailingIndices then
+        None
+    else
+        let idx = thinned maxFailMarkers outcome.FailingIndices
+
+        Some(
+            Chart.Point(
+                x = (idx |> Array.map (fun k -> xs.[k])),
+                y = (idx |> Array.map (fun k -> ys.[k])),
+                Name = name,
+                MarkerColor = Color.fromString limitFailColor,
+                MarkerSymbol = StyleParam.MarkerSymbol.X,
+                ShowLegend = false
+            )
+        )
+
 /// Grid of subplots for 2-port files, one per selected (i,j) parameter (e.g.
 /// `[ (1,1); (2,1) ]` for S11+S21), laid out left-to-right top-to-bottom in
 /// up to 2 columns. Each subplot overlays every labeled file's trace for
@@ -334,6 +415,7 @@ let private quadMulti
     (unit: string)
     (toY: Complex -> float)
     (showExtrema: bool)
+    (limitsFor: (int * int) -> LimitSegment list)
     (selected: (int * int) list)
     (files: (string * TouchstoneFile) list)
     =
@@ -358,10 +440,18 @@ let private quadMulti
                 extracted
                 |> List.map (fun (label, _, freqGHz, ys) -> (sprintf "%s S%d%d" label i j).Trim(), freqGHz, ys)
 
+            let limits = limitsFor (i, j)
+
             let chart =
-                extracted
-                |> List.map (fun (label, data, freqGHz, ys) ->
-                    traceOfSeries label (paramTraceName label i j data) freqGHz ys)
+                // Mask first so it sits behind the curves, failure markers
+                // last so they sit on top of whichever curve they belong to.
+                limitTraces limits
+                @ (extracted
+                   |> List.map (fun (label, data, freqGHz, ys) ->
+                       traceOfSeries label (paramTraceName label i j data) freqGHz ys))
+                @ (extracted
+                   |> List.choose (fun (label, data, freqGHz, ys) ->
+                       limitFailTrace limits (paramTraceName label i j data) freqGHz ys))
                 |> Chart.combine
                 |> Chart.withXAxisStyle "Frequency (GHz)"
                 |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
@@ -404,11 +494,15 @@ let private quadMulti
 
 /// Grid of magnitude (dB) subplots, each optionally annotated with its
 /// global min/max — see quadMulti.
-let magnitudeQuadMulti showExtrema selected files = quadMulti "Magnitude (dB)" "dB" toDb showExtrema selected files
+let magnitudeQuadMulti showExtrema limitsFor selected files =
+    quadMulti "Magnitude (dB)" "dB" toDb showExtrema limitsFor selected files
 
 /// Grid of phase (deg) subplots — see quadMulti. No min/max annotations:
 /// wrapped phase makes a single global extremum meaningless.
-let phaseQuadMulti selected files = quadMulti "Phase (deg)" "deg" toDeg false selected files
+/// No limit lines on phase: the limit table is entered in dB, against the
+/// magnitude chart (see LimitTest and magnitudeQuadMulti).
+let phaseQuadMulti selected files =
+    quadMulti "Phase (deg)" "deg" toDeg false (fun _ -> []) selected files
 
 let private circlePoints (cx: float) (cy: float) (r: float) (n: int) =
     [| for k in 0 .. n ->

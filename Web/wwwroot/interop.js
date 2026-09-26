@@ -227,8 +227,21 @@ window.touchstoneInterop = {
     _dedupeLegendByFile: function (data) {
         const seenFiles = new Set();
         return data.map((trace) => {
-            if (trace.showlegend === false || !trace.name) return trace;
+            // Nameless traces are chrome - the Smith chart's grid circles, the
+            // limit mask - and belong to no file at all.
+            if (!trace.name) return trace;
+
             const label = window.touchstoneInterop._fileLabelFor(trace.name);
+
+            // Carries a file label but stays out of the legend: the limit
+            // test's failure markers. It still needs the file's legendgroup,
+            // or a legend click would hide that file's curve and leave its
+            // red markers floating on their own - it just must never become
+            // the entry representing the group.
+            if (trace.showlegend === false) {
+                return Object.assign({}, trace, { legendgroup: label });
+            }
+
             const isFirst = !seenFiles.has(label);
             seenFiles.add(label);
             return Object.assign({}, trace, {
@@ -292,6 +305,17 @@ window.touchstoneInterop = {
         const swatch = document.getElementById('swatch-' + encodeURIComponent(fileName));
         if (swatch) swatch.style.opacity = nowHidden ? '0.25' : '1';
         window.touchstoneInterop._setFileVisible(fileName, !nowHidden);
+
+        // The limit test only judges curves that are on screen, and that
+        // verdict is rendered by Blazor - so the hidden set has to cross back
+        // into .NET. What the charts show stays client-side exactly as before;
+        // this feeds the PASS/FAIL badges and nothing else.
+        if (window.touchstoneInterop._dotNetRef) {
+            window.touchstoneInterop._dotNetRef.invokeMethodAsync(
+                'OnHiddenFilesChanged',
+                Array.from(window.touchstoneInterop._hiddenFiles)
+            );
+        }
     },
 
     // Filenames hidden via *either* chart-tdr's or chart-tdr-gated's own
@@ -526,6 +550,36 @@ window.touchstoneInterop = {
     // on-screen colors as-is.
     // Triggers a browser download of `text` as `filename` via a throwaway
     // Blob URL + synthetic anchor click.
+    // Limit tables, kept in localStorage so a spec entered once survives a
+    // reload. Deliberately a single opaque string (LimitTest.serialize's own
+    // format) rather than JSON assembled here: the F# side owns the format
+    // and parses defensively, so a hand-edited or truncated entry drops the
+    // bad row instead of breaking startup. Wrapped in try/catch because
+    // localStorage throws outright in a few browser configurations
+    // (private mode with site data blocked), where losing persistence is
+    // fine but losing the app is not.
+    _limitStorageKey: 'touchstone.limits.v1',
+
+    loadLimits: function () {
+        try {
+            return window.localStorage.getItem(window.touchstoneInterop._limitStorageKey) || '';
+        } catch (e) {
+            return '';
+        }
+    },
+
+    saveLimits: function (text) {
+        try {
+            if (text) {
+                window.localStorage.setItem(window.touchstoneInterop._limitStorageKey, text);
+            } else {
+                window.localStorage.removeItem(window.touchstoneInterop._limitStorageKey);
+            }
+        } catch (e) {
+            /* no persistence available - the tables still work for this session */
+        }
+    },
+
     _downloadText: function (filename, text) {
         const blob = new Blob([text], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);

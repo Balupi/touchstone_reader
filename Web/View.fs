@@ -7,6 +7,7 @@ open Bolero
 open Bolero.Html
 open Elmish
 open TouchstoneReader.Touchstone
+open TouchstoneReader.LimitTest
 open TouchstoneReader.TouchstonePlot
 open TouchstoneReader.Web.State
 
@@ -241,10 +242,260 @@ let private freqRangeLinkToggle (dispatch: Dispatch<Message>) (fileName: string)
         "Link range with other files"
     }
 
+/// PASS/FAIL for one file across every parameter that has an active limit
+/// table, or None when nothing is tested — an empty spec shows no badge
+/// rather than a green one, so "not checked" can't be read as "passed".
+/// Evaluated on the same windowed series the chart draws (it's handed the
+/// data from okFiles), so badge and red markers can't disagree.
+let private verdictOf (model: Model) (data: TouchstoneFile) =
+    let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
+
+    let outcomes =
+        model.LimitTables
+        |> Map.toList
+        |> List.filter (fun ((i, j), _) -> i <= data.Ports && j <= data.Ports)
+        |> List.map (fun ((i, j), segments) ->
+            let ys = entry data i j |> Array.map (fun c -> 20.0 * log10 c.Magnitude)
+            evaluate segments freqGHz ys)
+        |> List.filter (fun outcome -> outcome.Tested)
+
+    if outcomes.IsEmpty then
+        None
+    else
+        Some(outcomes |> List.forall passed)
+
+/// Every file's verdict, memoized. The badges are read on every Blazor
+/// render, but they only change when the files, their frequency windows or
+/// the tables do — and computing one means a dB pass plus a limit pass over
+/// every point of every file: measured at roughly 0.6 ms per file and table
+/// for an 11,000-point sweep natively, so ~12 ms for ten files against two
+/// tables, and the WASM interpreter multiplies that. Renders happen far more
+/// often than those inputs change — every status dispatch causes one — so
+/// the result is kept against a signature covering exactly those inputs.
+/// The windowed data carries its own range in its first/last point, so no
+/// separate generation counter is needed here.
+let mutable private verdictSignature = ""
+let mutable private verdictCache: Map<string, bool> = Map.empty
+
+let private limitVerdicts (model: Model) (ok: (string * TouchstoneFile) list) =
+    let sweepOf (name: string, data: TouchstoneFile) =
+        let n = data.Frequencies.Length
+        let lo = if n > 0 then data.Frequencies.[0] else 0.0
+        let hi = if n > 0 then data.Frequencies.[n - 1] else 0.0
+        sprintf "%s@%d:%g-%g" name n lo hi
+
+    let signature =
+        String.Join(
+            "##",
+            [| ok |> List.map sweepOf |> String.concat "|"
+               serialize (Map.toList model.LimitTables)
+               model.HiddenFiles |> Set.toList |> String.concat "," |]
+        )
+
+    if signature <> verdictSignature then
+        verdictSignature <- signature
+
+        verdictCache <-
+            ok
+            // Hidden files are skipped on purpose: a curve that isn't on
+            // screen isn't being judged, so leaving a stale FAIL beside it
+            // would claim more than the display is showing.
+            |> List.filter (fun (name, _) -> not (model.HiddenFiles.Contains name))
+            |> List.choose (fun (name, data) -> verdictOf model data |> Option.map (fun v -> name, v))
+            |> Map.ofList
+
+    verdictCache
+
+/// One row of a limit table, in the instrument's column order: TYPE, begin
+/// and end stimulus (GHz), begin and end response (dB). TYPE is a button
+/// group rather than the instrument's dropdown — one click instead of two,
+/// and it keeps the row to widgets this view already uses elsewhere.
+let private limitRow (dispatch: Dispatch<Message>) (i: int) (j: int) (index: int) (segment: LimitSegment) =
+    let numberCell (value: float) (withValue: float -> LimitSegment) =
+        td {
+            input {
+                attr.``class`` "input is-small"
+                attr.style "width: 6rem;"
+                attr.``type`` "number"
+                attr.step "any"
+                attr.value (formatInvariant value)
+
+                on.change (fun e ->
+                    match tryParseInvariant e.Value with
+                    | Some typed -> dispatch (SetLimitSegment(i, j, index, withValue typed))
+                    | None -> ())
+            }
+        }
+
+    tr {
+        td {
+            div {
+                attr.``class`` "buttons has-addons mb-0"
+
+                for kind in [ Max; Min; Off ] do
+                    button {
+                        attr.``class`` (
+                            if segment.Kind = kind then
+                                "button is-small is-primary is-selected"
+                            else
+                                "button is-small"
+                        )
+
+                        on.click (fun _ -> dispatch (SetLimitSegment(i, j, index, { segment with Kind = kind })))
+                        kindText kind
+                    }
+            }
+        }
+
+        numberCell segment.BeginStimulus (fun v -> { segment with BeginStimulus = v })
+        numberCell segment.EndStimulus (fun v -> { segment with EndStimulus = v })
+        numberCell segment.BeginResponse (fun v -> { segment with BeginResponse = v })
+        numberCell segment.EndResponse (fun v -> { segment with EndResponse = v })
+
+        td {
+            button {
+                attr.``class`` "delete"
+                attr.title "Remove this row"
+                on.click (fun _ -> dispatch (RemoveLimitSegment(i, j, index)))
+            }
+        }
+    }
+
+/// One parameter's limit table.
+let private limitTable (dispatch: Dispatch<Message>) (model: Model) ((i, j): int * int) =
+    let rows = model.LimitTables |> Map.tryFind (i, j) |> Option.defaultValue []
+
+    div {
+        attr.``class`` "mt-4"
+
+        div {
+            attr.``class`` "is-flex is-align-items-center mb-2"
+
+            span {
+                attr.``class`` "has-text-weight-semibold mr-3"
+                sprintf "S%d%d" i j
+            }
+
+            button {
+                attr.``class`` "button is-small mr-2"
+                on.click (fun _ -> dispatch (AddLimitSegment(i, j)))
+                "Add segment"
+            }
+
+            if rows.IsEmpty then
+                empty ()
+            else
+                button {
+                    attr.``class`` "button is-small is-light"
+                    on.click (fun _ -> dispatch (ClearLimitTable(i, j)))
+                    "Clear"
+                }
+        }
+
+        if rows.IsEmpty then
+            p {
+                attr.``class`` "has-text-grey is-size-7"
+                "No limits — this parameter isn't tested."
+            }
+        else
+            table {
+                attr.``class`` "table is-narrow is-fullwidth is-size-7 mb-0"
+
+                thead {
+                    tr {
+                        th { "Type" }
+                        th { "Begin stimulus (GHz)" }
+                        th { "End stimulus (GHz)" }
+                        th { "Begin response (dB)" }
+                        th { "End response (dB)" }
+                        th { "" }
+                    }
+                }
+
+                tbody {
+                    for (index, segment) in List.indexed rows do
+                        limitRow dispatch i j index segment
+                }
+            }
+    }
+
+/// The limit tables, as a collapsed sub-section of the magnitude chart: one
+/// table per *selected* parameter, since those are the subplots on screen,
+/// and the instrument keeps limits per trace too. Collapsed by default —
+/// entering a spec is a setup step, not something to look at while reading
+/// curves.
+let private limitSubSection (dispatch: Dispatch<Message>) (model: Model) =
+    let active =
+        model.LimitTables
+        |> Map.toList
+        |> List.filter (fun (_, rows) -> rows |> List.exists (fun s -> s.Kind <> Off))
+
+    let activeLabel =
+        active |> List.map (fun ((i, j), _) -> sprintf "S%d%d" i j) |> String.concat ", "
+
+    // Shown in the summary, which stays visible while the section is
+    // collapsed — a spec is only safe to leave running if you can see that
+    // it is. Restored tables say so explicitly: they were written for
+    // whatever files were loaded last time, not necessarily these.
+    let statusTag =
+        if active.IsEmpty then
+            empty ()
+        elif model.LimitsRestored then
+            span {
+                attr.``class`` "tag is-warning is-light ml-3"
+                sprintf "restored from storage: %s" activeLabel
+            }
+        else
+            span {
+                attr.``class`` "tag is-info is-light ml-3"
+                sprintf "active: %s" activeLabel
+            }
+
+    let restoredNotice =
+        if model.LimitsRestored && not active.IsEmpty then
+            div {
+                attr.``class`` "notification is-warning is-light py-2 px-3 mt-2 is-flex is-align-items-center"
+
+                span {
+                    attr.``class`` "is-size-7 mr-auto"
+                    "Restored from your last session and applied to every loaded file. Editing any row clears this note."
+                }
+
+                button {
+                    attr.``class`` "button is-small"
+                    on.click (fun _ -> dispatch ClearAllLimitTables)
+                    "Discard"
+                }
+            }
+        else
+            empty ()
+
+    details {
+        attr.``class`` "chart-section mt-4"
+
+        summary {
+            attr.``class`` "title is-6"
+            attr.style "cursor: pointer;"
+            "Limit Lines"
+            statusTag
+        }
+
+        restoredNotice
+
+        p {
+            attr.``class`` "has-text-grey is-size-7 mt-2"
+            "MAX fails points above the line, MIN below it. A segment only tests the frequencies it spans, and a table that is empty or all OFF tests nothing."
+        }
+
+        for pij in magnitudeQuadOrder |> List.filter model.MagnitudeSelected.Contains do
+            limitTable dispatch model pij
+    }
+
 let private fileTag
     (dispatch: Dispatch<Message>)
     (okCount: int)
     (unionRange: (float * float) option)
+    (verdict: bool option)
     (f: LoadedFile)
     =
     let deleteButton =
@@ -252,6 +503,20 @@ let private fileTag
             attr.``class`` "delete"
             on.click (fun _ -> dispatch (RemoveFile f.FileName))
         }
+
+    let verdictBadge =
+        match verdict with
+        | Some true ->
+            span {
+                attr.``class`` "tag is-success is-light mr-2"
+                "PASS"
+            }
+        | Some false ->
+            span {
+                attr.``class`` "tag is-danger mr-2"
+                "FAIL"
+            }
+        | None -> empty ()
 
     match f.Data with
     | Ok data ->
@@ -267,6 +532,7 @@ let private fileTag
                     f.FileName
                 }
 
+                verdictBadge
                 deleteButton
             }
 
@@ -779,8 +1045,13 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                 let okCount = ok.Length
                 let unionRange = unionFreqRangeGHz model.Files
 
+                // Only the files that are actually tested appear here; a
+                // missing entry means either no active table covers that file
+                // or it's hidden, and fileTag renders both as no badge at all.
+                let verdicts = limitVerdicts model ok
+
                 for f in model.Files do
-                    fileTag dispatch okCount unionRange f
+                    fileTag dispatch okCount unionRange (verdicts.TryFind f.FileName) f
 
                 let has2Port = ok |> List.exists (fun (_, data) -> data.Ports = 2)
 
@@ -798,7 +1069,7 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                                     (extremaToggle dispatch MagnitudeChart model.ShowMagnitudeExtrema)
                                     ""
                                     "chart-magnitude"
-                                    (empty ())
+                                    (limitSubSection dispatch model)
 
                                 chartSection
                                     dispatch

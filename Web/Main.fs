@@ -6,6 +6,7 @@ open Microsoft.JSInterop
 open Bolero
 open Elmish
 open Plotly.NET
+open TouchstoneReader.LimitTest
 open TouchstoneReader.TouchstonePlot
 open TouchstoneReader.Web.State
 open TouchstoneReader.Web.View
@@ -30,6 +31,9 @@ type App() =
     // building it eagerly for every render was real, mostly-wasted work for
     // large real-world sweeps (see ChartResult in TouchstonePlot.fs).
     let mutable lastCsvThunks: Map<string, unit -> string> = Map.empty
+    // Last limit-table text written to localStorage, so the tables are only
+    // pushed across the interop boundary when they actually changed.
+    let mutable lastSavedLimits = ""
 
     let view model dispatch =
         currentModel <- model
@@ -50,6 +54,16 @@ type App() =
     /// the number inputs/slider below the chart.
     [<JSInvokable>]
     member this.OnTdrGateDragged(loNs: float, hiNs: float) = this.Dispatch(SetTdrGate(loNs, hiNs))
+
+    /// Called from interop.js whenever a file-list swatch toggles a file's
+    /// visibility, so the model knows which curves are actually on screen.
+    /// Only the limit test reads it, and it is deliberately not part of any
+    /// chart's cache key: hiding a file stays a cheap Blazor re-render of the
+    /// file list instead of a full chart rebuild under the WASM interpreter,
+    /// which is why hiding lives client-side in the first place.
+    [<JSInvokable>]
+    member this.OnHiddenFilesChanged(files: string[]) =
+        this.Dispatch(SetHiddenFiles(Set.ofArray files))
 
     [<JSInvokable>]
     member this.OnFileDropped(fileName: string, content: string) =
@@ -73,9 +87,26 @@ type App() =
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupDropZone", "drop-zone", objRef).AsTask()
                 do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.bindThemeListener").AsTask()
 
+                // Limit tables outlive a reload: pull back what was stored
+                // and seed the model with it before the first chart render.
+                let! stored = this.JSRuntime.InvokeAsync<string>("touchstoneInterop.loadLimits").AsTask()
+
+                if not (System.String.IsNullOrWhiteSpace stored) then
+                    lastSavedLimits <- stored
+                    this.Dispatch(SetLimitTables(deserialize stored |> Map.ofList))
+
             // Binds the collapse/expand resize fix on any <details> that
             // appeared since the last render; no-ops on ones already bound.
             do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.setupCollapsibleCharts").AsTask()
+
+            // Write the limit tables back whenever they differ from what's
+            // stored. Done here rather than in `update`, which stays pure —
+            // same division as every other bit of JS this component drives.
+            let limitsText = serialize (Map.toList currentModel.LimitTables)
+
+            if limitsText <> lastSavedLimits then
+                lastSavedLimits <- limitsText
+                do! this.JSRuntime.InvokeVoidAsync("touchstoneInterop.saveLimits", limitsText).AsTask()
 
             /// Snapshot of the four sections' state right now: which files are
             /// loaded plus each section's own selection, combined into one key
@@ -114,6 +145,11 @@ type App() =
                     let smoothGd = currentModel.SmoothGroupDelay
                     let tdrGateNs = currentModel.TdrGateNs
                     let showVswrExtrema = currentModel.ShowVswrExtrema
+                    let limitTables = currentModel.LimitTables
+                    // Folded into MagKey below so editing a limit row redraws
+                    // the magnitude chart — the table is part of what that
+                    // chart shows, exactly like the parameter selection.
+                    let limitsKey = serialize (Map.toList limitTables)
 
                     Some
                         {| Ok = ok
@@ -129,7 +165,8 @@ type App() =
                            SmoothGd = smoothGd
                            TdrGateNs = tdrGateNs
                            ShowVswrExtrema = showVswrExtrema
-                           MagKey = keyOf magSelected + "##" + string showMagExtrema
+                           LimitTables = limitTables
+                           MagKey = keyOf magSelected + "##" + string showMagExtrema + "##" + limitsKey
                            PhaseKey = keyOf phaseSelected
                            SmithKey = keyOf smithSelected
                            GdKey = keyOf gdSelected + "##" + string gdMode + "##" + string showGdExtrema + "##" + string smoothGd
@@ -202,7 +239,10 @@ type App() =
                                 .AsTask()
 
                         if needsMagnitude then
-                            match magnitudeQuadMulti w.ShowMagExtrema w.MagSelected w.Ok with
+                            let limitsFor ij =
+                                w.LimitTables |> Map.tryFind ij |> Option.defaultValue []
+
+                            match magnitudeQuadMulti w.ShowMagExtrema limitsFor w.MagSelected w.Ok with
                             | Some result -> do! render "chart-magnitude" result
                             | None -> ()
 

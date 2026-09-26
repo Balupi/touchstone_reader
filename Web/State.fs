@@ -2,6 +2,7 @@
 module TouchstoneReader.Web.State
 
 open TouchstoneReader.Touchstone
+open TouchstoneReader.LimitTest
 open TouchstoneReader.TouchstonePlot
 
 type LoadedFile =
@@ -68,6 +69,26 @@ type Model =
       /// Bumped on every SetTdrGate/ResetTdrGate — same stale-DOM-value fix
       /// as LoadedFile.FreqRangeGen, applied to the gate's number inputs.
       TdrGateGen: int
+      /// Files currently hidden via their file-list color swatch, mirrored
+      /// here from interop.js's own _hiddenFiles (which stays the source of
+      /// truth for what the charts show). Read only by the limit test: a
+      /// curve that isn't on screen isn't tested, and gets no verdict badge.
+      /// Deliberately absent from every chart cache key in Main.fs — hiding a
+      /// file must stay a cheap view re-render, not a chart rebuild.
+      HiddenFiles: Set<string>
+      /// One Keysight-style limit table per magnitude parameter, keyed by
+      /// (i, j) — the instrument keeps limits per trace, and a return-loss
+      /// mask has nothing to do with an insertion-loss one. Shared by every
+      /// loaded file: comparing several assemblies against one spec is the
+      /// whole point here. Persisted to localStorage from Main.fs.
+      LimitTables: Map<int * int, LimitSegment list>
+      /// True while the tables are the ones restored from the browser at
+      /// startup and nothing has been edited since. Only the label in the
+      /// Limit Lines summary reads it: a spec carried over from a previous
+      /// session decides PASS/FAIL for whatever files are loaded now, which
+      /// may not be the files it was written for, so it says where it came
+      /// from instead of quietly applying itself.
+      LimitsRestored: bool
       Status: string option }
 
 let initModel =
@@ -80,13 +101,21 @@ let initModel =
       GroupDelaySelected = Set.ofList [ (2, 1) ]
       TdrSelected = Set.ofList [ (1, 1) ]
       GroupDelayMode = Absolute
-      ShowMagnitudeExtrema = true
-      ShowGroupDelayExtrema = true
-      ShowTdrExtrema = true
-      ShowVswrExtrema = true
+      // Min/max markers start off: they're a reading aid for one question
+      // ("what's the worst value anywhere in this set?"), not something every
+      // chart needs to open with, and on the magnitude chart they now share
+      // the plot with the limit mask, which is the boundary that actually
+      // matters. Each chart's own switch turns them back on.
+      ShowMagnitudeExtrema = false
+      ShowGroupDelayExtrema = false
+      ShowTdrExtrema = false
+      ShowVswrExtrema = false
       SmoothGroupDelay = false
       TdrGateNs = None
       TdrGateGen = 0
+      HiddenFiles = Set.empty
+      LimitTables = Map.empty
+      LimitsRestored = false
       Status = None }
 
 type Message =
@@ -105,6 +134,20 @@ type Message =
     | ResetFreqRange of fileName: string
     | SetFreqRangeLinked of fileName: string * linked: bool
     | SetStatus of string option
+    /// Replaces every limit table at once — used to bring in what was stored
+    /// in the browser on startup.
+    /// Pushed in from interop.js when a file-list swatch is clicked.
+    | SetHiddenFiles of Set<string>
+    | SetLimitTables of Map<int * int, LimitSegment list>
+    | AddLimitSegment of i: int * j: int
+    /// Replaces one row wholesale rather than carrying a field selector: the
+    /// editor rebuilds the row from its own inputs anyway.
+    | SetLimitSegment of i: int * j: int * index: int * segment: LimitSegment
+    | RemoveLimitSegment of i: int * j: int * index: int
+    | ClearLimitTable of i: int * j: int
+    /// Drops every table, which also clears the stored copy (an empty
+    /// serialization removes the localStorage entry, see Main.fs).
+    | ClearAllLimitTables
 
 /// Compares two filenames "naturally": a run of digits compares by its
 /// numeric value rather than character-by-character, so e.g. "c2.s2p"
@@ -177,6 +220,23 @@ let naturalCompare (a: string) (b: string) =
     // characters left is the longer one, and sorts after ("c1.s2p" before
     // "c1x.s2p").
     if result <> 0 then result else compare (a.Length - i) (b.Length - j)
+
+/// The frequency span (GHz) covered by the loaded files, for seeding a new
+/// limit row. Uses every Ok file's native sweep, not the windowed view: a
+/// limit table describes the spec, not whatever range happens to be on
+/// screen right now.
+let unionStimulusGHz (model: Model) =
+    let bounds =
+        model.Files
+        |> List.choose (fun f ->
+            match f.Data with
+            | Ok data when data.Frequencies.Length > 0 ->
+                Some(data.Frequencies.[0] / 1e9, data.Frequencies.[data.Frequencies.Length - 1] / 1e9)
+            | _ -> None)
+
+    match bounds with
+    | [] -> None
+    | _ -> Some(bounds |> List.map fst |> List.min, bounds |> List.map snd |> List.max)
 
 let update message model =
     match message with
@@ -278,6 +338,50 @@ let update message model =
                 model.Files
                 |> List.map (fun f -> if f.FileName = fileName then { f with FreqRangeLinked = linked } else f) }
     | SetStatus status -> { model with Status = status }
+    | SetHiddenFiles files -> { model with HiddenFiles = files }
+    | SetLimitTables tables -> { model with LimitTables = tables; LimitsRestored = true }
+    | AddLimitSegment(i, j) ->
+        let existing = model.LimitTables |> Map.tryFind (i, j) |> Option.defaultValue []
+
+        // A new row spans whatever the loaded files actually cover, so it
+        // starts out testing something instead of sitting at 0-0 GHz.
+        let lo, hi =
+            match unionStimulusGHz model with
+            | Some(lo, hi) -> lo, hi
+            | None -> 0.0, 0.0
+
+        { model with
+            LimitTables = model.LimitTables |> Map.add (i, j) (existing @ [ newSegment lo hi ])
+            LimitsRestored = false }
+    | SetLimitSegment(i, j, index, segment) ->
+        let existing = model.LimitTables |> Map.tryFind (i, j) |> Option.defaultValue []
+
+        let updated = existing |> List.mapi (fun k s -> if k = index then segment else s)
+
+        { model with
+            LimitTables = model.LimitTables |> Map.add (i, j) updated
+            LimitsRestored = false }
+    | RemoveLimitSegment(i, j, index) ->
+        let remaining =
+            model.LimitTables
+            |> Map.tryFind (i, j)
+            |> Option.defaultValue []
+            |> List.mapi (fun k s -> k, s)
+            |> List.filter (fun (k, _) -> k <> index)
+            |> List.map snd
+
+        { model with
+            LimitTables =
+                if remaining.IsEmpty then
+                    model.LimitTables |> Map.remove (i, j)
+                else
+                    model.LimitTables |> Map.add (i, j) remaining
+            LimitsRestored = false }
+    | ClearLimitTable(i, j) ->
+        { model with
+            LimitTables = model.LimitTables |> Map.remove (i, j)
+            LimitsRestored = false }
+    | ClearAllLimitTables -> { model with LimitTables = Map.empty; LimitsRestored = false }
 
 /// The Ok files, paired with their filename for use as an overlay chart
 /// label, windowed down to each file's selected frequency range (if any).

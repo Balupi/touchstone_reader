@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <Compile Include="..\Touchstone.fs" />
+    <Compile Include="..\LimitTest.fs" />
     <Compile Include="..\TouchstonePlot.fs" />
     <Compile Include="State.fs" />
     <Compile Include="View.fs" />
