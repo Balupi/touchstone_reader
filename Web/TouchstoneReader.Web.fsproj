@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <PackageReference Include="Bolero" Version="0.25.65" />
-    <PackageReference Include="Plotly.NET" Version="4.2.0" />
+    <PackageReference Include="Plotly.NET" Version="5.1.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.12" PrivateAssets="all" />
   </ItemGroup>
 

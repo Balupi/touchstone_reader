@@ -150,7 +150,7 @@ let private lttb (threshold: int) (points: (float * float)[]) =
 /// single-file/CLI chart functions don't need any of this — only the web
 /// app's multi-file `*Multi` functions return it.
 type ChartResult =
-    { Chart: GenericChart.GenericChart
+    { Chart: GenericChart
       Csv: unit -> string }
 
 /// CSV with each series as its own "label"/"label" x/y column pair —
@@ -612,12 +612,12 @@ let private smithTraces (label: string) (selected: (int * int) list) (data: Touc
         let name = if label = "" then name else sprintf "%s %s" label name
         styledLine label name (points |> Array.map fst) (points |> Array.map snd))
 
-let private smithLayout (chart: GenericChart.GenericChart) =
+let private smithLayout (chart: GenericChart) =
     let axisRange = StyleParam.Range.MinMax(-1.15, 1.15)
     let xAxis =
         LinearAxis.init (
             Range = axisRange,
-            ScaleAnchor = StyleParam.LinearAxisId.Y 1,
+            ScaleAnchor = StyleParam.ScaleAnchor.Y 1,
             ShowGrid = false,
             ZeroLine = false,
             Title = Title.init (Text = "Re(Γ)")
