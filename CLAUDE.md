@@ -43,10 +43,12 @@ dependency-light files don't need that ceremony. `TouchstoneReader.slnx` ties th
   it. Shared into the stripline calculator app.
 - CLI (`TouchstoneReader.fsproj`, net10.0): thin wrapper, opens charts in the system browser via
   `Chart.show`.
-- Web (`Web/TouchstoneReader.Web.fsproj`, net8.0 — capped by Bolero's latest dependency group, not a
-  free choice): Bolero (Elmish-on-Blazor-WebAssembly), split into `State.fs` (Model/Message/update),
-  `View.fs` (Bolero.Html view tree), `Main.fs` (the `ProgramComponent` + JS interop glue).
-- Stripline calculator (`StriplineCalc/StriplineCalc.fsproj`, net8.0): a second, fully independent
+- Web (`Web/TouchstoneReader.Web.fsproj`, net10.0): Bolero (Elmish-on-Blazor-WebAssembly), split into
+  `State.fs` (Model/Message/update), `View.fs` (Bolero.Html view tree), `Main.fs` (the
+  `ProgramComponent` + JS interop glue). All three projects are on net10.0 as of Bolero 0.25, which
+  added a net10.0 dependency group — before that the two Bolero apps were pinned to net8.0 by Bolero's
+  latest group, and that, not a preference, was the reason they lagged behind the CLI.
+- Stripline calculator (`StriplineCalc/StriplineCalc.fsproj`, net10.0): a second, fully independent
   Bolero app with the same `State.fs`/`View.fs`/`Main.fs` split — no Plotly, no interop.js, no code
   dependency on the Touchstone app; it shares only `Stripline*.fs`. Deployed alongside the main app
   under `/stripline/` (see Workflow below).
