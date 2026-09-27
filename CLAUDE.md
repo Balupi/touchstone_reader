@@ -103,6 +103,29 @@ else entirely.
 - **Reserved-word attributes need double-backtick escaping** in Bolero's `attr` module — e.g. the
   `type`, `class`, and `open` attributes, since those are F# keywords.
 
+### A NuGet version bump does not invalidate the webcil cache — clean `obj/` or debug a ghost
+Blazor WASM converts every managed assembly into a WebAssembly container ("webcil") under
+`obj/<Config>/<tfm>/webcil/`, and that step's incremental check does **not** notice a changed
+`PackageReference` version. After bumping Plotly.NET 4.2.0 → 5.1.0 the build was green, `bin/` held the
+new 5.1.0 `Plotly.NET.dll`, and the browser dutifully loaded a freshly-timestamped
+`_framework/Plotly.NET.<hash>.wasm` — which was the **old 4.2.0** assembly, re-stamped. The app
+therefore compiled against one version and ran against another, and the first call to a method only the
+new version has died with `MissingMethodException: Method not found: ... Chart.Grid(int, int,
+FSharpOption<...SubPlotTitles...>, ...)`.
+
+Three things worth keeping from that hour:
+
+- **`MissingMethodException` naming a method you can see in the package means a stale build artifact,
+  not a wrong API.** Compile-time and run-time are looking at different assemblies.
+- **Check the deployed artifact, not the package.** The fastest test needs no tooling at all:
+  `grep -ac <NewApiName> bin/.../Plotly.NET.dll` versus the same grep on
+  `bin/.../wwwroot/_framework/Plotly.NET.*.wasm`. Parameter names live in the metadata, so a hit in one
+  and not the other settles it in seconds. A size comparison against the previous tfm's webcil output
+  (byte-identical = re-stamped, not rebuilt) confirms it.
+- **The fix is deleting `bin/` and `obj/`,** not a rebuild and not a browser cache-bust — the browser was
+  loading exactly the file the server had. Do this as a matter of course after any package upgrade here,
+  and after a `TargetFramework` change, which also leaves a whole stale tfm tree behind.
+
 ### Upgrading Bolero: read which dependency groups the package actually ships
 The two web apps sat on `net8.0` for a release cycle with a comment calling it "capped by Bolero's
 latest dependency group" — accurate when written, and then quietly wrong once Bolero 0.25 added a

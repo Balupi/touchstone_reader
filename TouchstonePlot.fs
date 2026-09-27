@@ -310,14 +310,33 @@ let phaseChartMulti (files: (string * TouchstoneFile) list) =
 let magnitudeGrid (data: TouchstoneFile) =
     let freqGHz = data.Frequencies |> Array.map (fun f -> f / 1e9)
     let n = data.Ports
-    [ for i in 1 .. n do
-        for j in 1 .. n ->
-            let ys = entry data i j |> Array.map toDb
-            Chart.Line(x = freqGHz, y = ys, Name = sprintf "%A%d%d" data.Option.Parameter i j)
-            |> Chart.withTitle (sprintf "%A%d%d" data.Option.Parameter i j)
-            |> Chart.withXAxisStyle "Frequency (GHz)"
-            |> Chart.withYAxisStyle "Magnitude (dB)" ]
-    |> Chart.Grid(n, n)
+
+    // indexPair, not "%d%d": a 12-port file would otherwise label S1,11 as
+    // "S111", which reads equally well as S11,1.
+    let name (i, j) = sprintf "%A%s" data.Option.Parameter (indexPair (i, j))
+
+    let cells =
+        [ for i in 1 .. n do
+            for j in 1 .. n ->
+                let ys = entry data i j |> Array.map toDb
+
+                Chart.Line(x = freqGHz, y = ys, Name = name (i, j))
+                |> Chart.withXAxisStyle "Frequency (GHz)"
+                |> Chart.withYAxisStyle "dB" ]
+
+    // The cell label goes in SubPlotTitles rather than a per-cell
+    // Chart.withTitle: Chart.Grid collapses those into one shared title with
+    // only the last one surviving, so before Plotly.NET 5.0 every cell of this
+    // grid was labelled after whichever parameter happened to come last.
+    cells
+    |> Chart.Grid(
+        n,
+        n,
+        SubPlotTitles =
+            [ for i in 1 .. n do
+                for j in 1 .. n -> name (i, j) ]
+    )
+    |> Chart.withTitle "Magnitude (dB)"
     |> Chart.withSize (350 * n, 300 * n)
 
 /// The parameters the magnitude and phase grids offer, and the order they
@@ -447,9 +466,6 @@ let private quadMulti
     if available.IsEmpty then
         None
     else
-        // Chart.Grid collapses a per-subplot Chart.withTitle into one shared
-        // title (only the last one wins), but each subplot keeps its own
-        // axes — so the per-cell label goes on the Y axis instead.
         let subplot idx (i, j) =
             // Extracted once per file and used for both the trace and the
             // CSV/extrema series - see traceOfSeries.
@@ -477,7 +493,11 @@ let private quadMulti
                        limitFailTrace limits (paramTraceName label i j data) freqGHz ys))
                 |> Chart.combine
                 |> Chart.withXAxisStyle "Frequency (GHz)"
-                |> Chart.withYAxisStyle (paramName (i, j))
+                // Just the unit: the parameter is the subplot's own title (see
+                // SubPlotTitles below) and the quantity is the chart title, so
+                // repeating either here would only cost plot width - which
+                // matters at three columns.
+                |> Chart.withYAxisStyle unit
 
             let shapes, annotations =
                 if showExtrema then
@@ -503,7 +523,16 @@ let private quadMulti
         let chart =
             results
             |> List.map (fun (c, _, _, _) -> c)
-            |> Chart.Grid(rows, cols)
+            // One title per cell, in the same order the subplots were built.
+            // Before Plotly.NET 5.0 this wasn't possible - Chart.Grid collapsed
+            // every per-subplot Chart.withTitle into one shared title, only the
+            // last one surviving - so the parameter name had to live on the Y
+            // axis instead. Plotly renders these as paper-coordinate
+            // annotations above each cell, which is why the extrema
+            // annotations below must be appended rather than replace them:
+            // Chart.withAnnotations appends by default, and passing
+            // Append = false here would silently wipe every cell's title.
+            |> Chart.Grid(rows, cols, SubPlotTitles = (available |> List.map paramName))
             |> Chart.withTitle title
             // Never smaller than the full 2x2 quad's footprint, so toggling
             // a parameter off doesn't shrink the page layout — instead
