@@ -32,11 +32,20 @@ same name in different subfolders don't collide.
 
 ### Files
 
-Each loaded file gets a deterministic color (hashed from its filename, so
-it's stable regardless of load order) that's used consistently for that
-file's traces across every chart, plus a matching swatch in the file list.
-Clicking a file's swatch — or its legend entry on any chart — hides that
-file's curves everywhere at once; the swatch fades to show it's hidden.
+The file list is kept in natural alphanumeric order — digit runs compare by
+value, so `c2.s2p` sorts before `c10.s2p` — regardless of the order files were
+dropped in or the order their reads happened to finish. Colors are then handed
+out sequentially down that list from a 16-color palette following the DIN 47100
+wire-color code (white, brown, green, yellow, grey, pink, blue, red, then the
+same eight again as lighter twins), and each file keeps its color across every
+chart, with a matching swatch in the file list.
+
+Clicking a file's swatch — or its legend entry on any chart — hides that file's
+curves everywhere at once; the swatch fades to show it's hidden.
+Double-clicking a legend entry isolates that one file and hides all the others
+(double-click again to bring them back). Hovering a legend entry highlights
+that file's curve and dims the rest, without changing anything.
+
 Each file's own collapsible "Details" holds:
 
 - Port count, point count, parameter/format/reference impedance.
@@ -47,30 +56,63 @@ Each file's own collapsible "Details" holds:
   that file. A "Link range with other files" checkbox keeps several files'
   sliders in sync — dragging one moves every other linked file's range to
   match; unchecking it lets that one file's range move independently.
+- For files with an even port count above two (4, 6, 8, …), a **port layout**
+  switch: which ports face
+  which end of the assembly, either `1..N/2 | N/2+1..N` (through paths S31,
+  S42 on a 4-port file) or `1-2, 3-4, ...` (through paths S21, S43). A
+  Touchstone file carries none of this — the numbering is whatever the
+  measurement setup used — so there is deliberately **no default**: until it's
+  stated, the file is flagged in the list and the parameter groups below
+  (Through/NEXT/FEXT) and the Group Delay section stay unavailable rather than
+  guessing, which would relabel crosstalk as insertion loss. 1- and 2-port
+  files need no statement, and an odd port count has no second end to lay
+  anything across, so neither shows the switch.
 
 ### Charts
 
 Grouped into five collapsible sections (Magnitude open by default, the rest
-collapsed), each with its own S-parameter toggle buttons (S11+S21 selected
-by default) scoped to what it can show:
+collapsed), each with its own parameter picker (S11+S21 selected by default)
+scoped to what it can show. What the picker offers follows the port count of
+the loaded files, not a fixed 2-port assumption: a 2-port file gets the four
+familiar toggle buttons, and an N-port file gets buttons for whole parameter
+groups — **Reflection** (Sii), **Through**, **NEXT** (crosstalk measured at
+the same end) and **FEXT** (crosstalk measured at the opposite end) — plus the
+full N×N matrix behind a toggle, where each cell's tooltip names what that
+parameter is under the stated port layout. Group buttons select the forward
+direction only, since a passive assembly is reciprocal; S13 next to S31 is a
+click away in the matrix for anyone using the difference as a
+measurement-quality check.
 
-- **Magnitude (dB)** / **Phase (deg)** — S11/S21/S12/S22, laid out as a
-  VNA-style quad grid. The grid's reserved footprint stays constant
-  regardless of selection, so fewer selected parameters stretch to fill it
-  instead of shrinking the page layout.
-- **Smith Chart** — S11/S22 (the reflection coefficients). Its own nested,
+With several files loaded, the selection is shared and each subplot simply
+overlays the files that have that parameter — a 2-port and a 4-port file can
+be open together, contributing to S11/S21 and to S31/S42 respectively. Grids
+stop at 9 subplots (past that the cells stop being readable) and say how many
+were left out.
+
+- **Magnitude (dB)** / **Phase (deg)** — any Sij, laid out as a grid: the
+  conventional VNA quad (S11, S21, S12, S22) for a 2-port file, two columns
+  up to four parameters and three beyond that. The grid's reserved footprint
+  never falls below that quad's, so fewer selected parameters stretch to fill
+  it instead of shrinking the page layout. A 1-port reflection measurement
+  gets its S11 chart here too.
+- **Smith Chart** — the reflection coefficients (S11, S22, ... the whole
+  diagonal, whatever the port count). Its own nested,
   independently-collapsible **VSWR** sub-section plots the same reflection
   coefficients' magnitude as `(1+|Γ|)/(1-|Γ|)` against frequency instead —
   a frequency-domain scalar reading of the same data the Smith chart already
   shows as a complex trajectory.
-- **Group Delay (ns)** — S21/S12 (the transmission coefficients),
-  `-1/(2π) · dφ/df` with the phase unwrapped first. Switchable between each
+- **Group Delay (ns)** — each line's through path (S21/S12 on a 2-port file;
+  S31/S42 and their reverses on a 4-port file under `1..N/2 | N/2+1..N`),
+  `-1/(2π) · dφ/df` with the phase unwrapped first. Crosstalk paths are
+  deliberately not offered, and the section explains itself instead of
+  plotting anything while a file's port layout is unstated. Switchable between each
   file's absolute curve and its deviation from the pointwise mean across all
   loaded files (useful for spotting how much units differ from one
   another), and optional Savitzky-Golay smoothing — group delay is a
   numerical derivative of phase, which amplifies whatever measurement noise
   is already in the raw data.
-- **TDR Impedance (Ω)** — S11/S22 converted from the frequency domain to a
+- **TDR Impedance (Ω)** — the reflection coefficients (S11, S22, ... one per
+  port) converted from the frequency domain to a
   time-domain impedance profile via inverse FFT: extrapolated flat down to
   DC, resampled onto a uniform grid, tapered with a Kaiser window (unity at
   DC so the reconstructed step response holds its true plateau, tapering off
@@ -84,11 +126,32 @@ by default) scoped to what it can show:
   which forward-FFTs the gated time window back to a frequency response,
   isolating whichever reflection/discontinuity falls inside the gate from
   others sharing the same line. Ungated (the default) it reproduces the
-  ordinary S11/S22 magnitude as a sanity check.
+  ordinary reflection magnitude as a sanity check.
+
+### Limit lines and limit test
+
+The Magnitude section holds a collapsible **Limit Lines** sub-section with one
+table per selected parameter, in the same column order a Keysight NVA uses:
+TYPE (OFF / MIN / MAX), begin and end stimulus (GHz), begin and end response
+(dB). Each row is one straight segment of the mask and tests only the
+frequencies it spans; a table that is empty or all OFF tests nothing. The mask
+is drawn dashed on the magnitude chart, points that violate it are marked with
+red X markers, and each file in the list gets a **PASS**/**FAIL** badge for the
+tables covering it. Only visible curves are judged — hiding a file via its
+swatch removes its badge rather than leaving a stale verdict beside it.
+
+Tables are shared across all loaded files (comparing several assemblies against
+one spec is the point) and are kept in the browser's local storage, so they
+survive a reload. A restored table says so in the section's summary, since a
+spec carried over from a previous session decides PASS/FAIL for whatever files
+happen to be loaded now, and can be discarded from there. With files of
+different port counts loaded, note that a table is keyed by (i,j) alone: S21 is
+the insertion loss of a 2-port file but near-end crosstalk of a 4-port one
+under `1..N/2 | N/2+1..N`, and one shared S21 table would test both.
 
 Magnitude, Group Delay, TDR, and VSWR can each show a min/max reference line
 (with the value labeled at the axis) for the global extreme across every
-loaded file, toggled independently per section. Every chart's legend shows one
+loaded file, off by default and toggled independently per section. Every chart's legend shows one
 entry per file (not one per parameter); every chart has a CSV-export button
 (full-precision, not the downsampled display data) next to its parameter
 toggles, in addition to the same option in Plotly's own toolbar.
@@ -165,8 +228,14 @@ high-contrast geometries (a few seconds per solve under interpreted WASM).
   any frequency unit, the 2-port legacy ordering quirk (S11, S21, S12, S22).
 - v2.0: `[Version]`, `[Number of Ports]`, `[Reference]`, `[Matrix Format]`
   (Full/Lower/Upper), `[Two-Port Data Order]`, `[Network Data]` / `[End]`.
+- Any port count, in the CLI and the web frontend alike: the parameters each chart
+  offers, their display order and the defaults are derived from the file's port count
+  (`PortMap.fs`), not hardcoded for 2 ports. What a parameter *means* — through path,
+  near-end or far-end crosstalk — additionally needs the port layout stated per file,
+  since no Touchstone file carries it.
 - Not covered: noise-data blocks are parsed past but not exposed/plotted; mixed-mode
-  parameters.
+  parameters (SDD21 and friends); limit tables are keyed per (i,j), not per parameter
+  group, so one table means different things to files of different port counts.
 
 ## License
 

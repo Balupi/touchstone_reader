@@ -133,11 +133,21 @@ type App() =
                     let keyOf (selected: (int * int) list) =
                         filesKey + "##" + (selected |> List.map (fun (i, j) -> sprintf "%d%d" i j) |> String.concat ",")
 
-                    let magSelected = magnitudeQuadOrder |> List.filter currentModel.MagnitudeSelected.Contains
-                    let phaseSelected = magnitudeQuadOrder |> List.filter currentModel.PhaseSelected.Contains
-                    let smithSelected = smithOrder |> List.filter currentModel.SmithSelected.Contains
-                    let gdSelected = groupDelayOrder |> List.filter currentModel.GroupDelaySelected.Contains
-                    let tdrSelected = tdrOrder |> List.filter currentModel.TdrSelected.Contains
+                    // Each section's selection, narrowed to the parameters it
+                    // actually offers for the loaded files and put in that
+                    // section's display order (see State.paramOrderFor). This
+                    // is also what keeps a stale selection - e.g. S31 still
+                    // set after the only 4-port file was removed - from
+                    // reaching the chart builders.
+                    let selectionOf chart =
+                        let selected = selectionFor currentModel chart
+                        paramOrderFor currentModel chart |> List.filter selected.Contains
+
+                    let magSelected = selectionOf MagnitudeChart
+                    let phaseSelected = selectionOf PhaseChart
+                    let smithSelected = selectionOf SmithChart
+                    let gdSelected = selectionOf GroupDelayChart
+                    let tdrSelected = selectionOf TdrChart
                     let gdMode = currentModel.GroupDelayMode
                     let showMagExtrema = currentModel.ShowMagnitudeExtrema
                     let showGdExtrema = currentModel.ShowGroupDelayExtrema
@@ -202,87 +212,99 @@ type App() =
                 | Some _ ->
                     isRendering <- true
                     this.Dispatch(SetStatus(Some "Downsampling & rendering charts…"))
-                    // WASM is single-threaded: without yielding here, the browser
-                    // never gets a chance to paint the status before the
-                    // downsampling/JSON-building below blocks it. Files dropped
-                    // together may still be trickling in while we yield, so the
-                    // actual render below re-reads currentModel from scratch
-                    // instead of trusting this pre-yield snapshot.
-                    do! Task.Delay 1
+                    // Everything from here to the reset of isRendering runs
+                    // inside a try: an exception on the way to a figure used to
+                    // leave that flag set, and since every later pass starts
+                    // with `if not isRendering`, the app then skipped rendering
+                    // forever - indistinguishable from a file that never
+                    // finishes loading. A broken chart should cost that chart,
+                    // not the session.
+                    try
+                        // WASM is single-threaded: without yielding here, the browser
+                        // never gets a chance to paint the status before the
+                        // downsampling/JSON-building below blocks it. Files dropped
+                        // together may still be trickling in while we yield, so the
+                        // actual render below re-reads currentModel from scratch
+                        // instead of trusting this pre-yield snapshot.
+                        do! Task.Delay 1
 
-                    match pendingWork () with
-                    | None -> ()
-                    | Some w ->
-                        // Each section redraws only when its own files+selection
-                        // key changed, so toggling one section's buttons doesn't
-                        // force the other three to redraw along with it.
-                        let needsMagnitude = lastMagnitudeKey <> Some w.MagKey
-                        let needsPhase = lastPhaseKey <> Some w.PhaseKey
-                        let needsSmith = lastSmithKey <> Some w.SmithKey
-                        let needsGroupDelay = lastGroupDelayKey <> Some w.GdKey
-                        let needsTdr = lastTdrKey <> Some w.TdrKey
-                        let needsTdrGated = lastTdrGatedKey <> Some w.TdrGatedKey
-                        let needsVswr = lastVswrKey <> Some w.VswrKey
-                        lastMagnitudeKey <- Some w.MagKey
-                        lastPhaseKey <- Some w.PhaseKey
-                        lastSmithKey <- Some w.SmithKey
-                        lastGroupDelayKey <- Some w.GdKey
-                        lastTdrKey <- Some w.TdrKey
-                        lastTdrGatedKey <- Some w.TdrGatedKey
-                        lastVswrKey <- Some w.VswrKey
+                        match pendingWork () with
+                        | None -> ()
+                        | Some w ->
+                            // Each section redraws only when its own files+selection
+                            // key changed, so toggling one section's buttons doesn't
+                            // force the other three to redraw along with it.
+                            let needsMagnitude = lastMagnitudeKey <> Some w.MagKey
+                            let needsPhase = lastPhaseKey <> Some w.PhaseKey
+                            let needsSmith = lastSmithKey <> Some w.SmithKey
+                            let needsGroupDelay = lastGroupDelayKey <> Some w.GdKey
+                            let needsTdr = lastTdrKey <> Some w.TdrKey
+                            let needsTdrGated = lastTdrGatedKey <> Some w.TdrGatedKey
+                            let needsVswr = lastVswrKey <> Some w.VswrKey
+                            lastMagnitudeKey <- Some w.MagKey
+                            lastPhaseKey <- Some w.PhaseKey
+                            lastSmithKey <- Some w.SmithKey
+                            lastGroupDelayKey <- Some w.GdKey
+                            lastTdrKey <- Some w.TdrKey
+                            lastTdrGatedKey <- Some w.TdrGatedKey
+                            lastVswrKey <- Some w.VswrKey
 
-                        let render (divId: string) (result: ChartResult) : Task =
-                            lastCsvThunks <- lastCsvThunks |> Map.add divId result.Csv
+                            let render (divId: string) (result: ChartResult) : Task =
+                                lastCsvThunks <- lastCsvThunks |> Map.add divId result.Csv
 
-                            this.JSRuntime
-                                .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson result.Chart)
-                                .AsTask()
+                                this.JSRuntime
+                                    .InvokeVoidAsync("touchstoneInterop.renderChart", divId, GenericChart.toFigureJson result.Chart)
+                                    .AsTask()
 
-                        if needsMagnitude then
-                            let limitsFor ij =
-                                w.LimitTables |> Map.tryFind ij |> Option.defaultValue []
+                            if needsMagnitude then
+                                let limitsFor ij =
+                                    w.LimitTables |> Map.tryFind ij |> Option.defaultValue []
 
-                            match magnitudeQuadMulti w.ShowMagExtrema limitsFor w.MagSelected w.Ok with
-                            | Some result -> do! render "chart-magnitude" result
-                            | None -> ()
+                                match magnitudeQuadMulti w.ShowMagExtrema limitsFor w.MagSelected w.Ok with
+                                | Some result -> do! render "chart-magnitude" result
+                                | None -> ()
 
-                        if needsPhase then
-                            match phaseQuadMulti w.PhaseSelected w.Ok with
-                            | Some result -> do! render "chart-phase" result
-                            | None -> ()
+                            if needsPhase then
+                                match phaseQuadMulti w.PhaseSelected w.Ok with
+                                | Some result -> do! render "chart-phase" result
+                                | None -> ()
 
-                        if needsSmith then
-                            match smithChartMulti w.SmithSelected w.Ok with
-                            | Some result -> do! render "chart-smith" result
-                            | None -> ()
+                            if needsSmith then
+                                match smithChartMulti w.SmithSelected w.Ok with
+                                | Some result -> do! render "chart-smith" result
+                                | None -> ()
 
-                        if needsGroupDelay then
-                            let result =
-                                match w.GdMode with
-                                | Absolute -> groupDelayChartMulti w.ShowGdExtrema w.SmoothGd w.GdSelected w.Ok
-                                | DeviationFromMean ->
-                                    groupDelayDeviationChartMulti w.ShowGdExtrema w.SmoothGd w.GdSelected w.Ok
+                            if needsGroupDelay then
+                                let result =
+                                    match w.GdMode with
+                                    | Absolute -> groupDelayChartMulti w.ShowGdExtrema w.SmoothGd w.GdSelected w.Ok
+                                    | DeviationFromMean ->
+                                        groupDelayDeviationChartMulti w.ShowGdExtrema w.SmoothGd w.GdSelected w.Ok
 
-                            match result with
-                            | Some result -> do! render "chart-group-delay" result
-                            | None -> ()
+                                match result with
+                                | Some result -> do! render "chart-group-delay" result
+                                | None -> ()
 
-                        if needsTdr then
-                            match tdrChartMulti w.ShowTdrExtrema w.TdrGateNs w.TdrSelected w.Ok with
-                            | Some result -> do! render "chart-tdr" result
-                            | None -> ()
+                            if needsTdr then
+                                match tdrChartMulti w.ShowTdrExtrema w.TdrGateNs w.TdrSelected w.Ok with
+                                | Some result -> do! render "chart-tdr" result
+                                | None -> ()
 
-                        if needsTdrGated then
-                            match tdrGatedChartMulti w.TdrGateNs w.TdrSelected w.Ok with
-                            | Some result -> do! render "chart-tdr-gated" result
-                            | None -> ()
+                            if needsTdrGated then
+                                match tdrGatedChartMulti w.TdrGateNs w.TdrSelected w.Ok with
+                                | Some result -> do! render "chart-tdr-gated" result
+                                | None -> ()
 
-                        if needsVswr then
-                            match vswrChartMulti w.ShowVswrExtrema w.SmithSelected w.Ok with
-                            | Some result -> do! render "chart-vswr" result
-                            | None -> ()
+                            if needsVswr then
+                                match vswrChartMulti w.ShowVswrExtrema w.SmithSelected w.Ok with
+                                | Some result -> do! render "chart-vswr" result
+                                | None -> ()
 
-                    this.Dispatch(SetStatus None)
+                        this.Dispatch(SetStatus None)
+                    with ex ->
+                        this.Dispatch(SetStatus(Some(sprintf "Could not render the charts: %s" ex.Message)))
+                        eprintfn "chart rendering failed: %O" ex
+
                     isRendering <- false
         }
         :> Task

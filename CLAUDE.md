@@ -30,6 +30,12 @@ dependency-light files don't need that ceremony. `TouchstoneReader.slnx` ties th
 
 - `Touchstone.fs` / `TouchstonePlot.fs` at the repo root: pure F#, no UI dependencies. Parses Touchstone
   RF files and builds Plotly.NET charts. Shared between the CLI and the Touchstone web frontend.
+- `PortMap.fs` / `LimitTest.fs` at the repo root: pure F#, no dependencies at all — not even Plotly, which
+  is what makes them the two files in this project that can be exercised directly in `dotnet fsi` (see
+  Testing below). `PortMap.fs` turns a port count plus a stated port layout into what each Sij *means*
+  (reflection / through / NEXT / FEXT), the display order of a file's parameters, and each chart's default
+  selection; `LimitTest.fs` is the Keysight-style limit mask and its pass/fail evaluation. Anything
+  port-count-dependent belongs here rather than hardcoded in a chart or a view.
 - `Stripline.fs` / `StriplineFdm.fs` at the repo root: pure F#, no dependencies at all. Closed-form
   asymmetric-stripline impedance (Cohn's symmetric solution, offset handled per Wadell as the parallel
   combination of the two symmetric half-structures; two dielectrics combined via capacitance-weighted
@@ -302,6 +308,22 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
   the real restyle semantics that no stub reproduces. (Only in a sandbox with a Node toolchain, which
   this project deliberately doesn't have — see "Why Bolero, not Fable" — and an alternative to the
   Preview MCP route above, not a replacement for it.)
+- **`dotnet fsi` on the pure files is the cheapest verification available, and the dependency-free
+  files exist partly so it stays possible.** `Touchstone.fs`, `PortMap.fs`, `LimitTest.fs` and
+  `Stripline*.fs` need no package restore at all: `#load` them in a `.fsx`, assert against known
+  values, run. The N-port port-mapping logic was verified this way before a single chart or view
+  touched it — ~200 assertions, including structural ones worth more than the individual cases (the
+  four groups partition the S-matrix exactly, `groupOf` is symmetric in i/j, `displayOrder` is a
+  permutation of the whole matrix at every port count, every default selection is a subset of what its
+  section offers). Reach for this before reasoning about port arithmetic twice.
+- **A narrow stub can put a non-pure file under `fsi` too — stub only what it actually calls.**
+  `Web/State.fs` depends on `TouchstonePlot.fs` and therefore on Plotly.NET, but it only calls five
+  functions from it. A 10-line stub module with those five signatures, loaded between the real
+  `LimitTest.fs` and the real `State.fs`, type-checks State.fs in full and lets the real `update`
+  function be exercised message by message. That caught nothing here, but it did prove the new
+  port-count/layout helpers against the real Model — worth the ten lines every time the update
+  function grows. (Note the stub caveat above: this is legitimate because the stubbed surface is pure
+  data-shaping, not behavior the code depends on.)
 - If this or a follow-up project adds Expecto: `dotnet run`, not `dotnet test`, is the right way to
   invoke it — but that's not set up anywhere in this repo yet.
 
@@ -336,6 +358,15 @@ A few concepts that came up and are worth being comfortable with, not just patte
 - **The Blazor stale-DOM-value diffing bug** above — this class of bug (rendered value unchanged, but
   live DOM changed by the user) will resurface in any Blazor project with typed/transformed input;
   recognizing it fast saves real debugging time.
+- **Port layout is stated, never inferred** (`PortMap.fs`, `Model.PortLayouts`): a Touchstone file
+  says how many ports it has and nothing about which face which, so which Sij is a through path,
+  near-end crosstalk or far-end crosstalk is not derivable from the file. It is therefore a per-file
+  setting with *deliberately no default*: guessing would relabel someone's crosstalk as insertion loss,
+  which is worse than withholding the Through/NEXT/FEXT groups and the Group Delay section until it's
+  been stated. 1- and 2-port files need no statement (nothing to lay out / both layouts agree), which
+  is why the everyday 2-port workflow never sees the switch. Anything that *orders* the full matrix may
+  fall back to a layout (both cover every parameter, only the sequence differs — `State.orderingLayout`);
+  anything that *names* a path may not.
 - **Opt-out group-sync pattern**: when several items can be optionally kept in sync (here, each file's
   frequency-range slider — see `LoadedFile.FreqRangeLinked` / `SetFreqRange` in `State.fs`), a single
   global "linked" flag forces all-or-nothing. A per-item bool instead, combined with a small rule —
@@ -459,6 +490,37 @@ let result =
     match x with
     | A -> 1
 ```
+
+### A nested `match` swallows the outer match's remaining cases
+An inner `match` with no parentheses extends as far as it can, so any `|` case written after it is
+parsed as a case of the *inner* match, not the outer one:
+```fsharp
+// ❌ the two `| None` cases below belong to the INNER match on `groupOf ...`.
+//    The outer match on `layout` is left with only `Some l`, so it throws at
+//    runtime for `None` — and the compiler only says "rule never matched" and
+//    "incomplete pattern match", which is easy to read past.
+match layout with
+| Some l ->
+    match groupOf l ports (i, j) with
+    | Some g -> label g
+    | None -> "unclassified"
+| None when i = j -> "reflection"
+| None -> "layout not stated"
+
+// ✅ flatten it: compute the inner result into a binding first, then match once.
+let group =
+    match layout with
+    | Some l -> groupOf l ports (i, j)
+    | None -> if i = j then Some Reflection else None
+
+match group with
+| Some g -> label g
+| None when layout.IsNone -> "layout not stated"
+| None -> "unclassified"
+```
+A nested `match` is only safe as the outer match's **last** case (as in `State.paramOrderFor`). Anywhere
+else, flatten or parenthesize. This bites hardest in a project that can't be compiled here: the failure
+is a runtime `MatchFailureException` in exactly the branch the feature exists for.
 
 ### Types in namespaces, functions in modules
 For larger multi-file solutions: domain types/contracts at namespace level for shared accessibility,

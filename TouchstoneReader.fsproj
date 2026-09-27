@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Compile Include="Touchstone.fs" />
+    <Compile Include="PortMap.fs" />
     <Compile Include="LimitTest.fs" />
     <Compile Include="TouchstonePlot.fs" />
     <Compile Include="Program.fs" />

@@ -3,6 +3,7 @@ module TouchstoneReader.Web.State
 
 open TouchstoneReader.Touchstone
 open TouchstoneReader.LimitTest
+open TouchstoneReader.PortMap
 open TouchstoneReader.TouchstonePlot
 
 type LoadedFile =
@@ -89,6 +90,20 @@ type Model =
       /// may not be the files it was written for, so it says where it came
       /// from instead of quietly applying itself.
       LimitsRestored: bool
+      /// How each file's ports map onto the two ends of the assembly, keyed
+      /// by file name. A Touchstone file carries none of this — port
+      /// numbering is whatever the measurement setup used — so there is
+      /// deliberately no default: a file with more than 2 ports has no entry
+      /// here until it's been stated, and until then the Through/NEXT/FEXT
+      /// groups (and the whole Group Delay section) stay unavailable for it
+      /// rather than guessing. Guessing would relabel someone's crosstalk as
+      /// insertion loss. 1- and 2-port files never need an entry: with one
+      /// line there is nothing to lay out, and both layouts agree.
+      PortLayouts: Map<string, PortLayout>
+      /// Which chart sections have their full N x N parameter matrix
+      /// expanded. Only relevant past a handful of parameters — a 2-port
+      /// file's four buttons are shown flat, with no matrix to expand.
+      MatrixOpen: Set<ChartKind>
       Status: string option }
 
 let initModel =
@@ -116,6 +131,8 @@ let initModel =
       HiddenFiles = Set.empty
       LimitTables = Map.empty
       LimitsRestored = false
+      PortLayouts = Map.empty
+      MatrixOpen = Set.empty
       Status = None }
 
 type Message =
@@ -148,6 +165,14 @@ type Message =
     /// Drops every table, which also clears the stored copy (an empty
     /// serialization removes the localStorage entry, see Main.fs).
     | ClearAllLimitTables
+    /// States how one file's ports face each other. Never set implicitly.
+    | SetPortLayout of fileName: string * layout: PortLayout
+    /// Turns a whole parameter group (Reflection / Through / NEXT / FEXT) on
+    /// or off at once: on unless every member is already selected, in which
+    /// case off, which is how a "select all" checkbox behaves.
+    | ToggleParamGroup of chart: ChartKind * group: ParamGroup
+    /// Expands/collapses a section's full N x N parameter matrix.
+    | ToggleMatrix of chart: ChartKind
 
 /// Compares two filenames "naturally": a run of digits compares by its
 /// numeric value rather than character-by-character, so e.g. "c2.s2p"
@@ -238,6 +263,108 @@ let unionStimulusGHz (model: Model) =
     | [] -> None
     | _ -> Some(bounds |> List.map fst |> List.min, bounds |> List.map snd |> List.max)
 
+/// The port count the parameter pickers are built for: the largest among the
+/// loaded, parseable files. The selection is shared across files, and a
+/// parameter only some of them have simply doesn't appear in the others'
+/// subplots (see TouchstonePlot.quadMulti), so offering the union is right.
+/// Falls back to 2 with nothing loaded, which keeps the pickers looking
+/// exactly as they always have before the first file arrives.
+let pickerPorts (model: Model) =
+    let counts =
+        model.Files
+        |> List.choose (fun f ->
+            match f.Data with
+            | Ok data -> Some data.Ports
+            | Error _ -> None)
+
+    match counts with
+    | [] -> 2
+    | _ -> List.max counts
+
+/// The layout the parameter groups are named after: the stated layout of the
+/// first file that has `pickerPorts` ports. None means it hasn't been stated
+/// yet, and the caller must not guess — a through path named under the wrong
+/// layout is someone's crosstalk relabelled as insertion loss. 1- and 2-port
+/// files need no statement: with a single line there is nothing to lay out,
+/// and both layouts agree on S21, so those answer Some outright.
+let pickerLayout (model: Model) =
+    let ports = pickerPorts model
+
+    if ports <= 2 then
+        Some EndsSplit
+    else
+        model.Files
+        |> List.tryFind (fun f ->
+            match f.Data with
+            | Ok data -> data.Ports = ports
+            | Error _ -> false)
+        |> Option.bind (fun f -> model.PortLayouts.TryFind f.FileName)
+
+/// Layout used purely to order the magnitude/phase matrix. That matrix
+/// covers every parameter under either layout — only the sequence differs —
+/// so a file whose layout hasn't been stated still gets a complete picker.
+/// Nothing that *names* a path may use this; see pickerLayout.
+let orderingLayout (model: Model) = defaultArg (pickerLayout model) EndsSplit
+
+/// The parameters a section offers. Magnitude and Phase offer the whole
+/// matrix; Smith, VSWR and TDR the reflection diagonal; Group Delay the
+/// through paths — the one list that needs the layout to have been stated,
+/// hence empty until it is.
+let paramOrderFor (model: Model) (chart: ChartKind) =
+    let ports = pickerPorts model
+
+    match chart with
+    | MagnitudeChart
+    | PhaseChart -> magnitudeParamOrder (orderingLayout model) ports
+    | SmithChart
+    | VswrChart -> smithParamOrder ports
+    | TdrChart -> tdrParamOrder ports
+    | GroupDelayChart ->
+        match pickerLayout model with
+        | Some layout -> groupDelayParamOrder layout ports
+        | None -> []
+
+/// The selection a section reads. VSWR shares the Smith chart's.
+let selectionFor (model: Model) (chart: ChartKind) =
+    match chart with
+    | MagnitudeChart -> model.MagnitudeSelected
+    | PhaseChart -> model.PhaseSelected
+    | SmithChart
+    | VswrChart -> model.SmithSelected
+    | GroupDelayChart -> model.GroupDelaySelected
+    | TdrChart -> model.TdrSelected
+
+let private withSelection (chart: ChartKind) (selected: Set<int * int>) model =
+    match chart with
+    | MagnitudeChart -> { model with MagnitudeSelected = selected }
+    | PhaseChart -> { model with PhaseSelected = selected }
+    | SmithChart
+    | VswrChart -> { model with SmithSelected = selected }
+    | GroupDelayChart -> { model with GroupDelaySelected = selected }
+    | TdrChart -> { model with TdrSelected = selected }
+
+/// A group's parameters as far as one section offers them — what its group
+/// button switches. Empty means the button has nothing to do and is hidden.
+///
+/// Forward direction only (S31, not S13): a passive assembly is reciprocal, so
+/// the reverse of each path is nominally the same measurement, and selecting
+/// both would double the subplots for no new information. The reverses stay
+/// individually reachable in the matrix, which is where someone comparing S31
+/// against S13 as a measurement-quality check would go anyway.
+let groupParamsFor (model: Model) (chart: ChartKind) (group: ParamGroup) =
+    let ports = pickerPorts model
+    let offered = paramOrderFor model chart |> Set.ofList
+
+    let members =
+        match pickerLayout model, group with
+        // The diagonal is a reflection under either layout, so this one group
+        // can be offered before anything has been stated about the ports.
+        | None, Reflection -> reflectionParams ports
+        | None, _ -> []
+        | Some layout, _ -> groupMembers layout ports false group
+
+    members |> List.filter offered.Contains
+
 let update message model =
     match message with
     | FileDropped(fileName, content) ->
@@ -267,7 +394,13 @@ let update message model =
 
         { model with Files = files }
     | RemoveFile fileName ->
-        { model with Files = model.Files |> List.filter (fun f -> f.FileName <> fileName) }
+        { model with
+            Files = model.Files |> List.filter (fun f -> f.FileName <> fileName)
+            // Dropped with the file rather than kept around: a file reloaded
+            // later may well be a different measurement under the same name,
+            // and a silently remembered layout is the one thing this feature
+            // exists to avoid.
+            PortLayouts = Map.remove fileName model.PortLayouts }
     | ClearFiles -> initModel
     | ToggleParam(chart, i, j) ->
         let toggle (selected: Set<int * int>) =
@@ -276,13 +409,7 @@ let update message model =
             else
                 Set.add (i, j) selected
 
-        match chart with
-        | MagnitudeChart -> { model with MagnitudeSelected = toggle model.MagnitudeSelected }
-        | PhaseChart -> { model with PhaseSelected = toggle model.PhaseSelected }
-        | SmithChart -> { model with SmithSelected = toggle model.SmithSelected }
-        | GroupDelayChart -> { model with GroupDelaySelected = toggle model.GroupDelaySelected }
-        | TdrChart -> { model with TdrSelected = toggle model.TdrSelected }
-        | VswrChart -> model
+        withSelection chart (toggle (selectionFor model chart)) model
     | SetGroupDelayMode mode -> { model with GroupDelayMode = mode }
     | SetShowExtrema(MagnitudeChart, show) -> { model with ShowMagnitudeExtrema = show }
     | SetShowExtrema(GroupDelayChart, show) -> { model with ShowGroupDelayExtrema = show }
@@ -382,6 +509,32 @@ let update message model =
             LimitTables = model.LimitTables |> Map.remove (i, j)
             LimitsRestored = false }
     | ClearAllLimitTables -> { model with LimitTables = Map.empty; LimitsRestored = false }
+    | SetPortLayout(fileName, layout) ->
+        { model with PortLayouts = Map.add fileName layout model.PortLayouts }
+    | ToggleParamGroup(chart, group) ->
+        let members = groupParamsFor model chart group
+
+        if members.IsEmpty then
+            model
+        else
+            let selected = selectionFor model chart
+            // "Select all" semantics: the button only clears the group once
+            // every one of its members is already on, so a half-selected
+            // group completes rather than emptying.
+            let next =
+                if members |> List.forall selected.Contains then
+                    members |> List.fold (fun s p -> Set.remove p s) selected
+                else
+                    members |> List.fold (fun s p -> Set.add p s) selected
+
+            withSelection chart next model
+    | ToggleMatrix chart ->
+        { model with
+            MatrixOpen =
+                if model.MatrixOpen.Contains chart then
+                    Set.remove chart model.MatrixOpen
+                else
+                    Set.add chart model.MatrixOpen }
 
 /// The Ok files, paired with their filename for use as an overlay chart
 /// label, windowed down to each file's selected frequency range (if any).

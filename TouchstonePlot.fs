@@ -7,6 +7,7 @@ open Plotly.NET
 open Plotly.NET.LayoutObjects
 open TouchstoneReader.Touchstone
 open TouchstoneReader.LimitTest
+open TouchstoneReader.PortMap
 
 let private toDb (c: Complex) = 20.0 * log10 c.Magnitude
 let private toDeg (c: Complex) = c.Phase * 180.0 / Math.PI
@@ -257,7 +258,7 @@ let private paramSeries (toY: Complex -> float) (i: int) (j: int) (data: Touchst
 /// spell the parameter "S" unconditionally. Both spellings are kept as they
 /// were; unifying them would change existing exports.
 let private paramTraceName (label: string) (i: int) (j: int) (data: TouchstoneFile) =
-    let name = sprintf "%A%d%d" data.Option.Parameter i j
+    let name = sprintf "%A%s" data.Option.Parameter (indexPair (i, j))
     if label = "" then name else sprintf "%s %s" label name
 
 let private oneParamTrace (label: string) (toY: Complex -> float) (i: int) (j: int) (data: TouchstoneFile) =
@@ -319,9 +320,12 @@ let magnitudeGrid (data: TouchstoneFile) =
     |> Chart.Grid(n, n)
     |> Chart.withSize (350 * n, 300 * n)
 
-/// Conventional VNA quad order: S11 top-left, S21 top-right, S12
-/// bottom-left, S22 bottom-right.
-let magnitudeQuadOrder = [ (1, 1); (2, 1); (1, 2); (2, 2) ]
+/// The parameters the magnitude and phase grids offer, and the order they
+/// are drawn in, for a file with `ports` ports under `layout`: every Sij of
+/// the matrix, grouped reflection / through / NEXT / FEXT — see
+/// PortMap.displayOrder. A 2-port file still gets exactly the conventional
+/// VNA quad (S11, S21, S12, S22) this was hardcoded to before.
+let magnitudeParamOrder layout (ports: int) = displayOrder layout ports
 
 /// The limit mask and its violations. The mask has to stay legible on both
 /// themes, and these charts keep whatever color they're given here — only
@@ -403,13 +407,16 @@ let private limitFailTrace (segments: LimitSegment list) (name: string) (xs: flo
             )
         )
 
-/// Grid of subplots for 2-port files, one per selected (i,j) parameter (e.g.
-/// `[ (1,1); (2,1) ]` for S11+S21), laid out left-to-right top-to-bottom in
-/// up to 2 columns. Each subplot overlays every labeled file's trace for
-/// that parameter (`toY` picks the scalar plotted); files that aren't
-/// 2-port are skipped. When `showExtrema` is set, each subplot is annotated
-/// with the global min/max across all its overlaid files. Returns None if
-/// `selected` is empty.
+/// Grid of subplots, one per selected (i,j) parameter (e.g. `[ (1,1); (2,1) ]`
+/// for S11+S21), laid out left-to-right top-to-bottom: up to 2 columns for
+/// the classic quad or fewer, 3 columns beyond that. Each subplot overlays
+/// every loaded file that actually has that parameter (`toY` picks the scalar
+/// plotted), so a 2-port file loaded next to a 4-port one contributes to the
+/// S11/S21 subplots and simply isn't in the S42 one. When `showExtrema` is
+/// set, each subplot is annotated with the global min/max across all its
+/// overlaid files. At most PortMap.subplotCap subplots are drawn — beyond
+/// that the cells stop being readable, and the UI says how many it left out.
+/// Returns None if nothing selected is present in any loaded file.
 let private quadMulti
     (title: string)
     (unit: string)
@@ -419,11 +426,27 @@ let private quadMulti
     (selected: (int * int) list)
     (files: (string * TouchstoneFile) list)
     =
-    if selected.IsEmpty then
+    // Which files can contribute to a given parameter. The selection is
+    // global across loaded files while the port counts need not be, so this
+    // is per parameter rather than a single filtered file list.
+    let filesWith (i, j) =
+        files |> List.filter (fun (_, data) -> max i j <= data.Ports)
+
+    // Nothing selected, or nothing loaded that has any of it: either way
+    // there is no subplot to build. The empty-trace chart that came out of
+    // here before was enough to wedge the whole app - it threw on the way to
+    // a figure, and the render pass had no way to recover (see
+    // OnAfterRenderAsync in Main.fs). Every other *ChartMulti already bails
+    // out when its own filtered list is empty; this one didn't, which is what
+    // a 4-port file walked straight into.
+    let available =
+        selected
+        |> List.filter (fun p -> not (filesWith p).IsEmpty)
+        |> List.truncate subplotCap
+
+    if available.IsEmpty then
         None
     else
-        let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
-
         // Chart.Grid collapses a per-subplot Chart.withTitle into one shared
         // title (only the last one wins), but each subplot keeps its own
         // axes — so the per-cell label goes on the Y axis instead.
@@ -431,14 +454,14 @@ let private quadMulti
             // Extracted once per file and used for both the trace and the
             // CSV/extrema series - see traceOfSeries.
             let extracted =
-                files2p
+                filesWith (i, j)
                 |> List.map (fun (label, data) ->
                     let freqGHz, ys = paramSeries toY i j data
                     label, data, freqGHz, ys)
 
             let series =
                 extracted
-                |> List.map (fun (label, _, freqGHz, ys) -> (sprintf "%s S%d%d" label i j).Trim(), freqGHz, ys)
+                |> List.map (fun (label, _, freqGHz, ys) -> (sprintf "%s %s" label (paramName (i, j))).Trim(), freqGHz, ys)
 
             let limits = limitsFor (i, j)
 
@@ -454,7 +477,7 @@ let private quadMulti
                        limitFailTrace limits (paramTraceName label i j data) freqGHz ys))
                 |> Chart.combine
                 |> Chart.withXAxisStyle "Frequency (GHz)"
-                |> Chart.withYAxisStyle (sprintf "S%d%d" i j)
+                |> Chart.withYAxisStyle (paramName (i, j))
 
             let shapes, annotations =
                 if showExtrema then
@@ -466,10 +489,13 @@ let private quadMulti
 
             chart, shapes, annotations, series
 
-        let cols = min 2 selected.Length
-        let rows = (selected.Length + cols - 1) / cols
+        // Two columns keeps the conventional VNA quad (and anything smaller)
+        // exactly as it was; past four parameters a 2-column grid grows into
+        // a tall strip, so it widens to three.
+        let cols = if available.Length <= 4 then min 2 available.Length else 3
+        let rows = (available.Length + cols - 1) / cols
 
-        let results = selected |> List.mapi subplot
+        let results = available |> List.mapi subplot
         let shapes = results |> List.collect (fun (_, s, _, _) -> s)
         let annotations = results |> List.collect (fun (_, _, a, _) -> a)
         let allSeries = results |> List.collect (fun (_, _, _, s) -> s)
@@ -479,14 +505,14 @@ let private quadMulti
             |> List.map (fun (c, _, _, _) -> c)
             |> Chart.Grid(rows, cols)
             |> Chart.withTitle title
-            // Fixed at the full 2x2 quad's footprint regardless of how many
-            // of the (at most 4) parameters are actually selected, so
-            // toggling one off doesn't shrink the page layout — instead
+            // Never smaller than the full 2x2 quad's footprint, so toggling
+            // a parameter off doesn't shrink the page layout — instead
             // whatever's still selected stretches to fill that same space
-            // (e.g. one lone subplot fills the whole area instead of
-            // sitting small in a corner). Width is moot: interop.js's
+            // (e.g. one lone subplot fills the whole area instead of sitting
+            // small in a corner). A grid larger than the quad does grow, or
+            // its cells would be unreadably short. Width is moot: interop.js's
             // _makeResponsive always strips it in favor of autosize.
-            |> Chart.withSize (450 * 2, 350 * 2)
+            |> Chart.withSize (450 * max 2 cols, 350 * max 2 rows)
             |> Chart.withShapes shapes
             |> Chart.withAnnotations annotations
 
@@ -568,8 +594,10 @@ let private smithGrid () =
           yield smithGridLine (reactanceArc x)
           yield smithGridLine (reactanceArc -x) ]
 
-/// Reflection parameters selectable on the Smith chart: S11, S22.
-let smithOrder = [ (1, 1); (2, 2) ]
+/// Reflection parameters selectable on the Smith chart (and, sharing the
+/// same selection, on VSWR): the whole diagonal of a file with `ports`
+/// ports. S11, S22 for a 2-port file, as before.
+let smithParamOrder (ports: int) = reflectionParams ports
 
 let private smithTraces (label: string) (selected: (int * int) list) (data: TouchstoneFile) =
     selected
@@ -580,7 +608,7 @@ let private smithTraces (label: string) (selected: (int * int) list) (data: Touc
             |> Array.map (fun g -> g.Real, g.Imaginary)
             |> lttb maxPointsPerTrace
 
-        let name = sprintf "S%d%d" i i
+        let name = paramName (i, i)
         let name = if label = "" then name else sprintf "%s %s" label name
         styledLine label name (points |> Array.map fst) (points |> Array.map snd))
 
@@ -635,7 +663,7 @@ let smithChartMulti (selected: (int * int) list) (files: (string * TouchstoneFil
                             let gammas = entry data i i
 
                             label,
-                            (sprintf "%s S%d%d" label i i).Trim(),
+                            (sprintf "%s %s" label (paramName (i, i))).Trim(),
                             (gammas |> Array.map (fun g -> g.Real)),
                             (gammas |> Array.map (fun g -> g.Imaginary)) ]
 
@@ -684,7 +712,7 @@ let vswrChartMulti (showExtrema: bool) (selected: (int * int) list) (files: (str
                     for (i, j) in selected do
                         if i = j && i <= data.Ports then
                             label,
-                            (sprintf "%s S%d%d" label i i).Trim(),
+                            (sprintf "%s %s" label (paramName (i, i))).Trim(),
                             (data.Frequencies |> Array.map (fun f -> f / 1e9)),
                             vswrSeries i data ]
 
@@ -823,23 +851,28 @@ let private groupDelayDeviationSeriesAndTraces (smooth: bool) (i: int) (j: int) 
             interpolated
             |> List.map (fun (label, _data, ys) ->
                 let deviation = Array.init n (fun k -> ys.[k] - mean.[k])
-                let name = (sprintf "%s S%d%d" label i j).Trim()
+                let name = (sprintf "%s %s" label (paramName (i, j))).Trim()
                 let points = Array.zip freqGHz deviation |> lttb maxPointsPerTrace
                 let trace = styledLine label name (points |> Array.map fst) (points |> Array.map snd)
                 trace, (name, freqGHz, deviation))
 
         results |> List.map fst, results |> List.map snd
 
-/// Transmission parameters selectable for group delay: S21, S12.
-let groupDelayOrder = [ (2, 1); (1, 2) ]
+/// Transmission parameters selectable for group delay: each line's through
+/// path, forward direction first. S21, S12 for a 2-port file, as before;
+/// S31, S42, S13, S24 for a 4-port file under EndsSplit. Crosstalk terms are
+/// deliberately not offered — group delay of a coupling path is not a
+/// quantity anyone reads off a cable assembly.
+let groupDelayParamOrder layout (ports: int) = orderedGroup layout ports Through
 
 /// Group delay (ns) of the selected transmission parameters (e.g.
 /// `[ (2,1); (1,2) ]` for S21+S12, or the Y/Z/... equivalents) vs frequency
-/// (GHz), overlaid across labeled 2-port files, optionally annotated with
-/// the global min/max across all of them and optionally Savitzky-Golay
-/// smoothed (group delay is a numerical derivative of phase, which
-/// amplifies whatever measurement noise is already there). Returns None if
-/// `selected` is empty or none of the files are 2-port.
+/// (GHz), overlaid across labeled files — each file contributing only the
+/// parameters it actually has, so a 2-port and a 4-port file can be open at
+/// once. Optionally annotated with the global min/max across all of them and
+/// optionally Savitzky-Golay smoothed (group delay is a numerical derivative
+/// of phase, which amplifies whatever measurement noise is already there).
+/// Returns None if no loaded file has any of `selected`.
 let groupDelayChartMulti
     (showExtrema: bool)
     (smooth: bool)
@@ -849,34 +882,35 @@ let groupDelayChartMulti
     if selected.IsEmpty then
         None
     else
-        let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
-
-        if files2p.IsEmpty then
-            None
-        else
-            // Each (file, parameter) pair's series, computed once. The traces
-            // and the CSV/extrema series both need it, and a group-delay
-            // series is a whole unwrap + derivative (+ optional smoothing)
-            // pass - by far the most expensive thing this module used to
-            // compute twice. The two lists below keep their original, and
-            // deliberately different, orders: traces group by file, which is
-            // the legend order, while CSV columns group by parameter.
-            let extracted =
-                [ for (label, data) in files2p do
-                    for (i, j) in selected ->
+        // Each (file, parameter) pair's series, computed once. The traces and
+        // the CSV/extrema series both need it, and a group-delay series is a
+        // whole unwrap + derivative (+ optional smoothing) pass - by far the
+        // most expensive thing this module used to compute twice. The two
+        // lists below keep their original, and deliberately different,
+        // orders: traces group by file, which is the legend order, while CSV
+        // columns group by parameter. A file without the parameter simply
+        // isn't in either list, which is how a 2-port file sits alongside a
+        // 4-port one without contributing an empty S42 curve.
+        let extracted =
+            [ for (label, data) in files do
+                for (i, j) in selected do
+                    if max i j <= data.Ports then
                         {| Label = label
                            I = i
                            J = j
-                           Name = (sprintf "%s S%d%d" label i j).Trim()
+                           Name = (sprintf "%s %s" label (paramName (i, j))).Trim()
                            TraceName = paramTraceName label i j data
                            Xs = data.Frequencies |> Array.map (fun f -> f / 1e9)
                            Ys = groupDelaySeries smooth i j data |} ]
 
+        if extracted.IsEmpty then
+            None
+        else
             let series =
                 [ for (i, j) in selected do
-                    for (label, _) in files2p ->
-                        let e = extracted |> List.find (fun e -> e.Label = label && e.I = i && e.J = j)
-                        e.Name, e.Xs, e.Ys ]
+                    for e in extracted do
+                        if e.I = i && e.J = j then
+                            e.Name, e.Xs, e.Ys ]
 
             let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []
 
@@ -897,8 +931,10 @@ let groupDelayChartMulti
 /// delay — useful for spotting how much units differ from one another.
 /// Files on different frequency grids are linearly interpolated onto the
 /// first file's grid before averaging. Optionally annotated with the global
-/// min/max deviation. Returns None if `selected` is empty or fewer than two
-/// files are 2-port (a single file's deviation from itself is always zero).
+/// min/max deviation. A deviation needs at least two curves, so this is
+/// decided per parameter: a parameter only two of three loaded files have is
+/// still plotted, from those two. Returns None if no selected parameter is
+/// present in at least two files.
 let groupDelayDeviationChartMulti
     (showExtrema: bool)
     (smooth: bool)
@@ -908,12 +944,18 @@ let groupDelayDeviationChartMulti
     if selected.IsEmpty then
         None
     else
-        let files2p = files |> List.filter (fun (_, data) -> data.Ports = 2)
+        let perParam =
+            selected
+            |> List.map (fun (i, j) -> (i, j), files |> List.filter (fun (_, data) -> max i j <= data.Ports))
+            |> List.filter (fun (_, withParam) -> withParam.Length >= 2)
 
-        if files2p.Length < 2 then
+        if perParam.IsEmpty then
             None
         else
-            let results = selected |> List.map (fun (i, j) -> groupDelayDeviationSeriesAndTraces smooth i j files2p)
+            let results =
+                perParam
+                |> List.map (fun ((i, j), withParam) -> groupDelayDeviationSeriesAndTraces smooth i j withParam)
+
             let traces = results |> List.collect fst
             let series = results |> List.collect snd
             let shapes, annotations = if showExtrema then extremumMarkers "x" "y" "ns" series else [], []
@@ -1155,8 +1197,10 @@ let private tdrGatedResponse (gateNs: (float * float) option) (freqsHz: float[])
     let freqsOutHz = Array.init m (fun k -> float k * df)
     freqsOutHz, spectrum.[0 .. m - 1]
 
-/// Reflection parameters selectable for TDR: S11, S22 (same pairing as the Smith chart).
-let tdrOrder = [ (1, 1); (2, 2) ]
+/// Reflection parameters selectable for TDR: the whole diagonal (S11, S22
+/// for a 2-port file, as before — the same set the Smith chart offers, though
+/// TDR keeps its own selection).
+let tdrParamOrder (ports: int) = reflectionParams ports
 
 /// Vertical dashed guide lines marking a time gate's bounds on the TDR
 /// Impedance chart, spanning the full plot height (Yref "paper") regardless
@@ -1216,7 +1260,7 @@ let private gateBoundaryShapes (gateNs: (float * float) option) =
 let private tdrSeriesAndTrace (label: string) (i: int) (data: TouchstoneFile) =
     let gamma = entry data i i
     let timeNs, impedance = tdrImpedance data.Option.R data.Frequencies gamma
-    let name = (sprintf "%s S%d%d" label i i).Trim()
+    let name = (sprintf "%s %s" label (paramName (i, i))).Trim()
     let trace = styledLine label name timeNs impedance
     trace, (name, timeNs, impedance)
 
@@ -1270,7 +1314,7 @@ let private tdrGatedTrace (label: string) (gateNs: (float * float) option) (i: i
     let freqsOutHz, gammaOut = tdrGatedResponse gateNs data.Frequencies gamma
     let freqGHz = freqsOutHz |> Array.map (fun f -> f / 1e9)
     let db = gammaOut |> Array.map toDb
-    let name = (sprintf "%s S%d%d" label i i).Trim()
+    let name = (sprintf "%s %s" label (paramName (i, i))).Trim()
     let trace = styledLine label name freqGHz db
     trace, (name, freqGHz, db)
 

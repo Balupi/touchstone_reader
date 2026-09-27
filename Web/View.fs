@@ -8,6 +8,7 @@ open Bolero.Html
 open Elmish
 open TouchstoneReader.Touchstone
 open TouchstoneReader.LimitTest
+open TouchstoneReader.PortMap
 open TouchstoneReader.TouchstonePlot
 open TouchstoneReader.Web.State
 
@@ -373,7 +374,7 @@ let private limitTable (dispatch: Dispatch<Message>) (model: Model) ((i, j): int
 
             span {
                 attr.``class`` "has-text-weight-semibold mr-3"
-                sprintf "S%d%d" i j
+                paramName (i, j)
             }
 
             button {
@@ -431,7 +432,7 @@ let private limitSubSection (dispatch: Dispatch<Message>) (model: Model) =
         |> List.filter (fun (_, rows) -> rows |> List.exists (fun s -> s.Kind <> Off))
 
     let activeLabel =
-        active |> List.map (fun ((i, j), _) -> sprintf "S%d%d" i j) |> String.concat ", "
+        active |> List.map (fun (p, _) -> paramName p) |> String.concat ", "
 
     // Shown in the summary, which stays visible while the section is
     // collapsed — a spec is only safe to leave running if you can see that
@@ -487,8 +488,61 @@ let private limitSubSection (dispatch: Dispatch<Message>) (model: Model) =
             "MAX fails points above the line, MIN below it. A segment only tests the frequencies it spans, and a table that is empty or all OFF tests nothing."
         }
 
-        for pij in magnitudeQuadOrder |> List.filter model.MagnitudeSelected.Contains do
+        for pij in paramOrderFor model MagnitudeChart |> List.filter model.MagnitudeSelected.Contains do
             limitTable dispatch model pij
+    }
+
+/// Per-file port-layout switch, shown only for files that need one (see
+/// PortMap.needsLayout): a 1- or 2-port file has nothing to lay out or no
+/// ambiguity about it, and an odd port count has no second end to lay
+/// anything across. Starts with neither option selected on purpose —
+/// see Model.PortLayouts. The through paths in each label are what make the
+/// choice checkable against the actual measurement setup.
+let private portLayoutPicker
+    (dispatch: Dispatch<Message>)
+    (fileName: string)
+    (ports: int)
+    (layout: PortLayout option)
+    =
+    let optionButton (l: PortLayout) =
+        let isOn = layout = Some l
+
+        button {
+            attr.``class`` (if isOn then "button is-small is-info mr-2" else "button is-small mr-2")
+            attr.title (layoutDescription l)
+            on.click (fun _ -> dispatch (SetPortLayout(fileName, l)))
+            layoutLabel l
+        }
+
+    let hint =
+        match layout with
+        | Some l ->
+            let through = throughParams l ports |> List.map paramName |> String.concat ", "
+
+            span {
+                attr.``class`` "has-text-grey is-size-7"
+                sprintf "through: %s" through
+            }
+        | None ->
+            span {
+                attr.``class`` "tag is-warning is-light"
+                "not set — Through/NEXT/FEXT and Group Delay stay unavailable"
+            }
+
+    div {
+        attr.``class`` "field mt-3 mb-0"
+
+        label {
+            attr.``class`` "label is-small mb-1"
+            sprintf "Port layout (%d ports)" ports
+        }
+
+        div {
+            attr.``class`` "is-flex is-align-items-center is-flex-wrap-wrap"
+            optionButton EndsSplit
+            optionButton AdjacentPairs
+            hint
+        }
     }
 
 let private fileTag
@@ -496,6 +550,7 @@ let private fileTag
     (okCount: int)
     (unionRange: (float * float) option)
     (verdict: bool option)
+    (layout: PortLayout option)
     (f: LoadedFile)
     =
     let deleteButton =
@@ -532,6 +587,16 @@ let private fileTag
                     f.FileName
                 }
 
+                // Visible with Details collapsed: an unstated layout silently
+                // withholds half the charts, so it can't hide behind a click.
+                if needsLayout data.Ports && layout.IsNone then
+                    span {
+                        attr.``class`` "tag is-warning is-light mr-2"
+                        "port layout?"
+                    }
+                else
+                    empty ()
+
                 verdictBadge
                 deleteButton
             }
@@ -555,6 +620,11 @@ let private fileTag
                             t
                         }
                 }
+
+                if needsLayout data.Ports then
+                    portLayoutPicker dispatch f.FileName data.Ports layout
+                else
+                    empty ()
 
                 freqRangeSlider dispatch f.FileName data f.FreqRangeGHz f.FreqRangeGen f.FreqRangeLinked unionRange
 
@@ -595,7 +665,7 @@ let private paramToggle (dispatch: Dispatch<Message>) (chart: ChartKind) (select
     button {
         attr.``class`` (if isOn then "button is-small is-info mr-2" else "button is-small mr-2")
         on.click (fun _ -> dispatch (ToggleParam(chart, i, j)))
-        sprintf "S%d%d" i j
+        paramName (i, j)
     }
 
 /// Downloads the chart's underlying (non-downsampled) data as a CSV, via the
@@ -611,29 +681,266 @@ let private csvDownloadButton (divId: string) =
         "⬇ CSV"
     }
 
-/// A collapsible <details> section with its own parameter toggle row and
-/// chart container. `open`'s toggle event doesn't rebuild the Plotly chart,
-/// so interop.js resizes it on expand — otherwise a chart drawn while
-/// hidden renders at 0 size and never fixes itself. `extraControls` renders
-/// between the toggle row and the chart (e.g. Group Delay's absolute/
-/// deviation switch); `nested` renders after the chart (e.g. TDR's Gated
-/// Magnitude sub-section, sharing this section's own parameter selection
-/// rather than duplicating a toggle row for the same S11/S22); pass
-/// `empty ()` for either when not needed. Both `extraControls` and `nested`
-/// (and the chart div itself) are skipped when nothing's selected, so a
-/// nested sub-section never renders with no parameters chosen for it either.
-let private chartSection
+/// One cell of the full matrix: same toggle, but labelled with just the
+/// indices and sized to keep an 8x8 grid compact. The tooltip carries what
+/// the parameter means under the stated port layout, which is the part that
+/// isn't obvious from "62".
+let private matrixCell
     (dispatch: Dispatch<Message>)
+    (chart: ChartKind)
+    (selected: Set<int * int>)
     (title: string)
-    (isOpenByDefault: bool)
+    (i, j)
+    =
+    let isOn = selected.Contains(i, j)
+
+    button {
+        attr.``class`` (if isOn then "button is-small is-info" else "button is-small is-light")
+        attr.style "padding: 0 0.4em; height: 1.75em;"
+        attr.title title
+        on.click (fun _ -> dispatch (ToggleParam(chart, i, j)))
+        indexPair (i, j)
+    }
+
+/// Switches every parameter of one group that this section offers. Hidden
+/// when the group is empty here: a 2-port file has no crosstalk, a
+/// diagonal-only section has nothing but reflections, and before a >2-port
+/// file's layout has been stated only Reflection is defined at all (see
+/// State.groupParamsFor).
+let private groupButton
+    (dispatch: Dispatch<Message>)
+    (model: Model)
+    (chart: ChartKind)
+    (selected: Set<int * int>)
+    (group: ParamGroup)
+    =
+    let members = groupParamsFor model chart group
+
+    if members.IsEmpty then
+        empty ()
+    else
+        let allOn = members |> List.forall selected.Contains
+        let anyOn = members |> List.exists selected.Contains
+
+        button {
+            attr.``class`` (
+                if allOn then "button is-small is-info mr-2"
+                elif anyOn then "button is-small is-info is-light mr-2"
+                else "button is-small mr-2"
+            )
+            attr.title (
+                sprintf "%s — %s" (groupDescription group) (members |> List.map paramName |> String.concat ", ")
+            )
+            on.click (fun _ -> dispatch (ToggleParamGroup(chart, group)))
+            groupLabel group
+        }
+
+/// The full N x N parameter matrix, rows = response port i, columns =
+/// stimulus port j — the same orientation as the instrument's own matrix.
+/// Cells this section doesn't offer (everything off the diagonal, in a
+/// reflection-only section) are dots rather than dead buttons.
+let private paramMatrix
+    (dispatch: Dispatch<Message>)
+    (model: Model)
     (chart: ChartKind)
     (order: (int * int) list)
     (selected: Set<int * int>)
+    =
+    let ports = pickerPorts model
+    let offered = Set.ofList order
+    let layout = pickerLayout model
+
+    // Deliberately not a match nested inside a match: an inner `match` with
+    // outer cases after it silently absorbs them as its own (they typecheck,
+    // being options either way), leaving the outer match incomplete and this
+    // throwing exactly when the layout is unstated - the case that matters.
+    let cellTitle (i, j) =
+        let group =
+            match layout with
+            | Some l -> groupOf l ports (i, j)
+            // The diagonal is a reflection under either layout, so it can be
+            // named before anything has been stated about the ports.
+            | None -> if i = j then Some Reflection else None
+
+        match group with
+        | Some g -> sprintf "%s — %s" (paramName (i, j)) (groupLabel g)
+        | None when layout.IsNone -> sprintf "%s — port layout not stated" (paramName (i, j))
+        | None -> sprintf "%s — not classifiable at this port count" (paramName (i, j))
+
+    div {
+        attr.``class`` "mb-3"
+        attr.style "overflow-x: auto;"
+
+        table {
+            attr.``class`` "table is-narrow is-bordered is-size-7 mb-0"
+
+            thead {
+                tr {
+                    th {
+                        attr.``class`` "has-text-grey has-text-weight-normal"
+                        "i \\ j"
+                    }
+
+                    for j in 1..ports do
+                        th {
+                            attr.``class`` "has-text-centered has-text-grey has-text-weight-normal"
+                            string j
+                        }
+                }
+            }
+
+            tbody {
+                for i in 1..ports do
+                    tr {
+                        th {
+                            attr.``class`` "has-text-grey has-text-weight-normal"
+                            string i
+                        }
+
+                        for j in 1..ports do
+                            td {
+                                attr.``class`` "p-1 has-text-centered"
+
+                                if offered.Contains(i, j) then
+                                    matrixCell dispatch chart selected (cellTitle (i, j)) (i, j)
+                                else
+                                    span {
+                                        attr.``class`` "has-text-grey-light"
+                                        "·"
+                                    }
+                            }
+                    }
+            }
+        }
+    }
+
+/// A section's parameter picker. Up to 8 parameters (any 1- or 2-port file,
+/// and every reflection-only section up to 8 ports) it stays the flat row of
+/// S-parameter buttons it always was. Past that — a 4-port file's 16
+/// parameters, an 8-port file's 64 — a flat row is not a picker, so it
+/// becomes group buttons plus the current selection as removable chips, with
+/// the full matrix behind a toggle.
+let private paramPicker
+    (dispatch: Dispatch<Message>)
+    (model: Model)
+    (chart: ChartKind)
+    (order: (int * int) list)
+    (selected: Set<int * int>)
+    (active: (int * int) list)
+    (divId: string)
+    =
+    if order.Length <= 8 then
+        div {
+            attr.``class`` "field is-grouped is-flex-wrap-wrap mb-3"
+
+            for pij in order do
+                paramToggle dispatch chart selected pij
+
+            csvDownloadButton divId
+        }
+    else
+        let matrixOpen = model.MatrixOpen.Contains chart
+        let matrixLabel = if matrixOpen then "Matrix ▴" else "Matrix ▾"
+
+        let selectionChips =
+            if active.IsEmpty then
+                span {
+                    attr.``class`` "has-text-grey is-size-7 mr-3"
+                    "nothing selected"
+                }
+            else
+                concat {
+                    for pij in active do
+                        paramToggle dispatch chart selected pij
+                }
+
+        concat {
+            div {
+                attr.``class`` "is-flex is-align-items-center is-flex-wrap-wrap mb-2"
+
+                for g in allGroups do
+                    groupButton dispatch model chart selected g
+
+                button {
+                    attr.``class`` (
+                        if matrixOpen then
+                            "button is-small is-link is-light mr-2"
+                        else
+                            "button is-small is-light mr-2"
+                    )
+                    attr.title (sprintf "All %d parameters of the matrix" order.Length)
+                    on.click (fun _ -> dispatch (ToggleMatrix chart))
+                    matrixLabel
+                }
+
+                csvDownloadButton divId
+            }
+
+            div {
+                attr.``class`` "is-flex is-align-items-center is-flex-wrap-wrap mb-3"
+                selectionChips
+            }
+
+            if matrixOpen then
+                paramMatrix dispatch model chart order selected
+            else
+                empty ()
+        }
+
+/// A collapsible <details> section with its own parameter picker and chart
+/// container. Which parameters it offers and which are selected both come
+/// from the model via the ChartKind (see State.paramOrderFor /
+/// State.selectionFor), so a section never carries its own hardcoded port
+/// assumptions. `open`'s toggle event doesn't rebuild the Plotly chart, so
+/// interop.js resizes it on expand — otherwise a chart drawn while hidden
+/// renders at 0 size and never fixes itself. `extraControls` renders between
+/// the picker and the chart (e.g. Group Delay's absolute/deviation switch);
+/// `nested` renders after the chart (e.g. TDR's Gated Magnitude sub-section,
+/// sharing this section's own parameter selection rather than duplicating a
+/// picker for the same S11/S22); pass `empty ()` for either when not needed.
+/// `nested` and the chart div are skipped when nothing plottable is selected,
+/// so a nested sub-section never renders with no parameters chosen for it.
+let private chartSection
+    (dispatch: Dispatch<Message>)
+    (model: Model)
+    (title: string)
+    (isOpenByDefault: bool)
+    (chart: ChartKind)
     (extraControls: Node)
     (divStyle: string)
     (divId: string)
     (nested: Node)
     =
+    let order = paramOrderFor model chart
+    let selected = selectionFor model chart
+    // Only what this section both offers and has selected. The selection is
+    // shared across loaded files and survives them being removed, so it can
+    // hold a parameter no loaded file has — that must read as "nothing
+    // selected" here, not as an empty chart div waiting for a figure that
+    // never comes.
+    let active = order |> List.filter selected.Contains
+
+    // Past the cap the grid's cells stop being readable, so quadMulti draws
+    // the first `subplotCap` and this says so rather than letting the rest
+    // vanish silently. Only the two grid sections can hit it; the others
+    // overlay everything into a single chart.
+    let capNotice =
+        if (chart = MagnitudeChart || chart = PhaseChart) && active.Length > subplotCap then
+            span {
+                attr.``class`` "tag is-warning is-light mb-3"
+                sprintf "%d selected — only the first %d are drawn" active.Length subplotCap
+            }
+        else
+            empty ()
+
+    let emptyNotice =
+        if not order.IsEmpty then
+            "Select at least one parameter above."
+        elif chart = GroupDelayChart then
+            "Group delay is measured on the through paths, and those can't be named until each file's port layout is set — see Details on the file above."
+        else
+            "None of this chart's parameters exist in the loaded files."
+
     details {
         attr.``class`` "chart-section box mt-4"
 
@@ -645,21 +952,14 @@ let private chartSection
             title
         }
 
-        div {
-            attr.``class`` "field is-grouped mb-3"
-
-            for pij in order do
-                paramToggle dispatch chart selected pij
-
-            csvDownloadButton divId
-        }
-
+        paramPicker dispatch model chart order selected active divId
+        capNotice
         extraControls
 
-        if selected.IsEmpty then
+        if active.IsEmpty then
             p {
                 attr.``class`` "has-text-grey"
-                "Select at least one parameter above."
+                emptyNotice
             }
         else
             concat {
@@ -1051,62 +1351,73 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
                 let verdicts = limitVerdicts model ok
 
                 for f in model.Files do
-                    fileTag dispatch okCount unionRange (verdicts.TryFind f.FileName) f
-
-                let has2Port = ok |> List.exists (fun (_, data) -> data.Ports = 2)
+                    fileTag dispatch okCount unionRange (verdicts.TryFind f.FileName) (model.PortLayouts.TryFind f.FileName) f
 
                 if not ok.IsEmpty then
                     concat {
-                        if has2Port then
-                            concat {
-                                chartSection
-                                    dispatch
-                                    "Magnitude (dB)"
-                                    true
-                                    MagnitudeChart
-                                    magnitudeQuadOrder
-                                    model.MagnitudeSelected
-                                    (extremaToggle dispatch MagnitudeChart model.ShowMagnitudeExtrema)
-                                    ""
-                                    "chart-magnitude"
-                                    (limitSubSection dispatch model)
+                        // No port-count gate on these two: magnitude and phase
+                        // are defined for any Sij, so a 1-port return-loss
+                        // measurement gets its chart too (it used to be
+                        // silently chartless), and an N-port file gets the
+                        // whole matrix instead of a 2-port quad.
+                        chartSection
+                            dispatch
+                            model
+                            "Magnitude (dB)"
+                            true
+                            MagnitudeChart
+                            (extremaToggle dispatch MagnitudeChart model.ShowMagnitudeExtrema)
+                            ""
+                            "chart-magnitude"
+                            (limitSubSection dispatch model)
 
-                                chartSection
-                                    dispatch
-                                    "Phase (deg)"
-                                    false
-                                    PhaseChart
-                                    magnitudeQuadOrder
-                                    model.PhaseSelected
-                                    (empty ())
-                                    ""
-                                    "chart-phase"
-                                    (empty ())
-                            }
+                        chartSection
+                            dispatch
+                            model
+                            "Phase (deg)"
+                            false
+                            PhaseChart
+                            (empty ())
+                            ""
+                            "chart-phase"
+                            (empty ())
 
                         if ok |> List.exists (fun (_, data) -> data.Option.Parameter = S) then
                             chartSection
                                 dispatch
+                                model
                                 "Smith Chart"
                                 false
                                 SmithChart
-                                smithOrder
-                                model.SmithSelected
                                 (empty ())
                                 "max-width: 700px; margin: 0 auto;"
                                 "chart-smith"
                                 (vswrSubSection false (extremaToggle dispatch VswrChart model.ShowVswrExtrema) "chart-vswr")
 
-                        if has2Port then
-                            let comparableCount = ok |> List.filter (fun (_, data) -> data.Ports = 2) |> List.length
+                        // Shown for any file that has two ends at all, even
+                        // before its port layout is stated — the section then
+                        // explains what's missing instead of disappearing.
+                        if isTwoSided (pickerPorts model) then
+                            // How many files could be compared against each
+                            // other: those that actually have one of the
+                            // selected through paths. A 2-port file next to a
+                            // 4-port one shares none of them, so it doesn't
+                            // count towards the two curves a deviation needs.
+                            let gdSelected =
+                                paramOrderFor model GroupDelayChart |> List.filter model.GroupDelaySelected.Contains
+
+                            let comparableCount =
+                                ok
+                                |> List.filter (fun (_, data) ->
+                                    gdSelected |> List.exists (fun (i, j) -> max i j <= data.Ports))
+                                |> List.length
 
                             chartSection
                                 dispatch
+                                model
                                 "Group Delay (ns)"
                                 false
                                 GroupDelayChart
-                                groupDelayOrder
-                                model.GroupDelaySelected
                                 (concat {
                                     groupDelayModeToggle dispatch model.GroupDelayMode comparableCount
                                     extremaToggle dispatch GroupDelayChart model.ShowGroupDelayExtrema
@@ -1123,11 +1434,10 @@ let renderView (model: Model) (dispatch: Dispatch<Message>) =
 
                             chartSection
                                 dispatch
+                                model
                                 "TDR Impedance (Ω)"
                                 false
                                 TdrChart
-                                tdrOrder
-                                model.TdrSelected
                                 (concat {
                                     extremaToggle dispatch TdrChart model.ShowTdrExtrema
                                     tdrGateSlider dispatch model.TdrGateNs model.TdrGateGen maxGateNs
