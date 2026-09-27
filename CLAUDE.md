@@ -12,8 +12,9 @@ if a follow-up project grows one of those, don't apply it speculatively to this 
 
 ## Commands
 
-No test suite and no separate linter — `dotnet build` (and its warnings) plus actually running the
-apps is the whole development loop.
+Needs the **.NET 10 SDK** and nothing else — all three projects target `net10.0`. No test suite and no
+separate linter: `dotnet build` (and its warnings) plus actually running the apps is the whole
+development loop.
 
 - CLI: `dotnet run -- path/to/file.s2p`
 - Touchstone web app: `dotnet run --project Web/TouchstoneReader.Web.fsproj` — dev server on
@@ -101,6 +102,24 @@ else entirely.
   `interop.js` changes, is the reliable fix — a plain reload often isn't enough.
 - **Reserved-word attributes need double-backtick escaping** in Bolero's `attr` module — e.g. the
   `type`, `class`, and `open` attributes, since those are F# keywords.
+
+### Upgrading Bolero: read which dependency groups the package actually ships
+The two web apps sat on `net8.0` for a release cycle with a comment calling it "capped by Bolero's
+latest dependency group" — accurate when written, and then quietly wrong once Bolero 0.25 added a
+`net10.0` group. A pinned framework justified by a dependency is worth re-checking against the NuGet
+page rather than trusting the comment, including this file's own comments.
+
+Two things made that upgrade a non-event, and both are worth checking before budgeting time for the
+next one:
+
+- **Bolero's upgrade guide is written for server-hosted projects.** `RequiresAspNetWebAssets`, the
+  `UseBlazorFrameworkFiles` ordering, `MapStaticAssets`, `StaticWebAssetsLoader` — none of it applies
+  to a standalone WebAssembly app (`Microsoft.NET.Sdk.BlazorWebAssembly`, no server project, no
+  `Startup.fs`), which is what both apps here are.
+- **The 0.25 API break is confined to `Bolero.Templating`.** Template event handlers and bindings
+  gained `Task`/`Async<unit>` overloads, which can need a type annotation to disambiguate. Nothing here
+  uses the template type provider — the views are all HTML DSL — so `grep -r "Bolero.Templating\|Template<"`
+  returning nothing was the whole compatibility check.
 
 ## Plotly.NET / Plotly.js notes
 
@@ -216,6 +235,8 @@ else entirely.
   CPU-bound code, at the cost of a much longer publish build and a larger shipped bundle. Requires
   `dotnet workload install wasm-tools` (not installed as of this writing) and gets applied only to
   Release/publish builds — get the user's explicit go-ahead before installing new tooling like this.
+  This is the one remaining untried performance lever, and it should stay a step of its own: bundling
+  it with anything else (a framework bump, say) makes a change in load time unattributable.
 - **Prefer lazy over eager for anything expensive that isn't always needed.** `ChartResult.Csv` is a
   `unit -> string` thunk, not a pre-built string, specifically because building it (a full string per
   data point) on every render — even though the download button is clicked rarely — was measurably

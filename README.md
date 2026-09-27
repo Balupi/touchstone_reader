@@ -3,6 +3,11 @@
 Reads Touchstone RF network-parameter files (`.s1p`, `.s2p`, `.s3p`, `.s4p`, `.sNp`) —
 both legacy (v1.0/1.1) and v2.0 keyword-based formats — and plots them with Plotly.NET.
 
+Needs the **.NET 10 SDK** and nothing else — no Node.js, no npm, no JS bundler.
+All three projects (CLI, Touchstone web app, stripline calculator) target
+`net10.0`; the two web apps run on Bolero 0.25, which is what made that
+possible.
+
 ## Run
 
 ```
@@ -165,9 +170,9 @@ JPEG regardless of the on-screen theme, keeping each file's own color.
 
 ### Deploy to GitHub Pages
 
-`.github/workflows/deploy-pages.yml` publishes the web app and deploys it as
-a GitHub Pages project site on every push to `web-frontend` (or via manual
-dispatch from the Actions tab). One-time setup: in the repo's **Settings →
+`.github/workflows/deploy-pages.yml` publishes the web app (pinning the SDK to
+`10.0.x`) and deploys it as a GitHub Pages project site on every push to
+`web-frontend` (or via manual dispatch from the Actions tab). One-time setup: in the repo's **Settings →
 Pages**, set **Source** to **GitHub Actions**. The site then lives at
 `https://<owner>.github.io/<repo>/`.
 
@@ -177,12 +182,27 @@ Pages**, set **Source** to **GitHub Actions**. The site then lives at
 open TouchstoneReader.Touchstone
 open TouchstoneReader.TouchstonePlot
 
-let data = Touchstone.read "amplifier.s2p"
-// data.Ports, data.Frequencies (Hz), data.Matrices (Complex[,] per frequency, 1-indexed)
+let data = read "amplifier.s2p"
+// data.Ports, data.Frequencies (Hz), and one Complex[] per parameter in
+// data.Entries — read it through the accessor rather than indexing yourself:
+let s21 = entry data 2 1          // Complex[], one per frequency point
+let cropped = windowed 1e9 40e9 data    // crop to a frequency range (Hz)
 
 magnitudeChart data |> Chart.show
 magnitudeGrid data |> Chart.show   // small-multiples, one chart per Sij
 smithChart data |> Chart.show      // S-parameters only: Sii on a Smith grid
+```
+
+`TouchstoneReader.PortMap` is the port-count side of the same domain, and is
+useful on its own — it has no dependencies at all:
+
+```fsharp
+open TouchstoneReader.PortMap
+
+groupOf EndsSplit 4 (3, 1)               // Some Through
+throughParams EndsSplit 4                // [(3, 1); (4, 2)]  — i.e. S31, S42
+groupMembers EndsSplit 4 false FarEndCrosstalk   // S32, S41
+paramName (1, 11)                        // "S1,11"
 ```
 
 ## Stripline impedance calculator
