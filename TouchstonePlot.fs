@@ -5,6 +5,9 @@ open System
 open System.Numerics
 open Plotly.NET
 open Plotly.NET.LayoutObjects
+// For DynObj: two of the gate label's properties have no typed equivalent —
+// see gateLabel below.
+open DynamicObj
 open TouchstoneReader.Touchstone
 open TouchstoneReader.LimitTest
 open TouchstoneReader.PortMap
@@ -1258,13 +1261,53 @@ let tdrParamOrder (ports: int) = reflectionParams ports
 let private gateLoColor = "#17a2b8"
 let private gateHiColor = "#c2185b"
 
+/// Text carried by a gate boundary line, so the line states its own position
+/// instead of it only being readable in the number inputs below the chart.
+/// Plotly re-renders a shape continuously while it is being dragged, so the
+/// value counts along with the handle rather than appearing once the drag is
+/// released.
+///
+/// Two of its properties have no typed equivalent in Plotly.NET and are set on
+/// the underlying DynamicObj instead:
+///
+///   * `textposition` — Plotly.NET types it as the trace-level TextPosition
+///     ("top left", "middle center", ...), but a *line* shape accepts only
+///     "start" | "middle" | "end", and that DU has no case for them. "end" is
+///     the Y1 end, which here is the top of the plot. Passing one of the typed
+///     values instead would be silently wrong.
+///   * `textangle` is typed, but a line label defaults to running along its
+///     line, which on a vertical gate boundary means text reading
+///     bottom-to-top. 0 keeps it horizontal.
+///
+/// `xcenter` rather than `x0`, because the line is drawn as a rectangle of
+/// width 2*epsilon (see below) and x0 would read an epsilon low.
+let private gateLabel (color: string) (xAnchor: StyleParam.XAnchorPosition) =
+    let label =
+        ShapeLabel.init (
+            TextTemplate = "%{xcenter:.3f} ns",
+            TextAngle = StyleParam.TextAngle.Degrees 0.0,
+            XAnchor = xAnchor,
+            YAnchor = StyleParam.YAnchorPosition.Bottom,
+            Padding = 4,
+            Font = Font.init (Size = 11.0, Color = Color.fromString color)
+        )
+
+    DynObj.setValue label "textposition" "end"
+    label
+
 let private gateBoundaryShapes (gateNs: (float * float) option) =
     match gateNs with
     | None -> []
     | Some(lo, hi) ->
         let epsilon = 1e-6
 
-        let vline (color: string) x =
+        // The two labels anchor outwards - the lower bound's to the left of
+        // its line, the upper bound's to the right - so a narrow gate splays
+        // them apart instead of stacking them on top of each other. Checked in
+        // a browser at both ends of the axis: neither gets clipped, and at the
+        // top of the line they sit clear of the plot area rather than over the
+        // curve.
+        let vline (color: string) (xAnchor: StyleParam.XAnchorPosition) x =
             Shape.init (
                 ShapeType = StyleParam.ShapeType.Line,
                 X0 = x - epsilon,
@@ -1274,10 +1317,12 @@ let private gateBoundaryShapes (gateNs: (float * float) option) =
                 Xref = "x",
                 Yref = "paper",
                 Editable = true,
+                Label = gateLabel color xAnchor,
                 Line = Line.init (Color = Color.fromString color, Dash = StyleParam.DrawingStyle.Dot, Width = 1.5)
             )
 
-        [ vline gateLoColor lo; vline gateHiColor hi ]
+        [ vline gateLoColor StyleParam.XAnchorPosition.Right lo
+          vline gateHiColor StyleParam.XAnchorPosition.Left hi ]
 
 /// Not lttb-downsampled unlike the other *Trace helpers: the native point
 /// count here (half of tdrNFftFor's data-dependent nFft) stays well within

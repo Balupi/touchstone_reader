@@ -319,6 +319,15 @@ then check via `preview_screenshot` / `preview_inspect` / `preview_console_logs`
 - **Simulating a click on a Plotly legend entry**: a synthetic click on the visible `.legend .traces`
   group doesn't trigger Plotly's own handler. Target the (invisible) `.legend .legendtoggle` hit-area
   element instead — that's what Plotly actually binds the click listener to.
+- **Simulating a drag of an editable Plotly shape**: the shape's visible path is *not* the drag target.
+  Plotly renders each editable shape as two siblings in `g.shapelayer` — a `g.shape-group`
+  (`pointer-events: none`, holding the path and, if present, `g.shape-label`) and an unclassed `g`
+  (`pointer-events: all`) holding the drag path plus two `circle.cursor-grab` endpoint handles. Dispatch
+  `mousedown` on `g.shapelayer > g:not(.shape-group) > path`, then `mousemove` on `document`, then
+  `mouseup`; targeting the visible path silently does nothing, which reads exactly like a broken drag.
+  Holding the drag open across several `mousemove`s is also the only way to observe mid-drag state — it
+  is what showed that a shape label's `texttemplate` recomputes on every move while the app-side value
+  is still the pre-drag one.
 - **`gd.emit('plotly_relayout', {...})` only fires the notification — it doesn't mutate `gd.layout`
   the way a real drag or an actual `Plotly.relayout(gd, {...})` call does.** Fine for testing a
   listener's own logic in isolation (it still receives the event), but any assertion that reads
